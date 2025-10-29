@@ -401,6 +401,45 @@ class DatabaseManager:
             if conn:
                 conn.close()
     
+    def update_violation(self, violation_id, start_time, end_time, description):
+        """Update pelanggaran berdasarkan ID"""
+        conn = None
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                UPDATE violations 
+                SET start_time = ?, end_time = ?, description = ?
+                WHERE id = ?
+            ''', (start_time, end_time, description, violation_id))
+            
+            conn.commit()
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            raise e
+        finally:
+            if conn:
+                conn.close()
+    
+    def delete_violation(self, violation_id):
+        """Hapus pelanggaran berdasarkan ID"""
+        conn = None
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('DELETE FROM violations WHERE id = ?', (violation_id,))
+            conn.commit()
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            raise e
+        finally:
+            if conn:
+                conn.close()
+    
     def get_shift_settings(self):
         """Mengambil pengaturan shift"""
         conn = None

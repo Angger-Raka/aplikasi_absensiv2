@@ -63,6 +63,240 @@ class ViolationDialog(QDialog):
             'description': self.description.toPlainText()
         }
 
+class ViolationManagementDialog(QDialog):
+    def __init__(self, db_manager, attendance_id, employee_name, parent=None):
+        super().__init__(parent)
+        self.db_manager = db_manager
+        self.attendance_id = attendance_id
+        self.employee_name = employee_name
+        
+        self.setWindowTitle(f"Kelola Pelanggaran - {employee_name}")
+        self.setModal(True)
+        self.resize(800, 500)
+        self.init_ui()
+        self.load_violations()
+    
+    def init_ui(self):
+        layout = QVBoxLayout()
+        
+        # Header info
+        info_label = QLabel(f"Kelola Pelanggaran untuk: {self.employee_name}")
+        info_label.setStyleSheet("font-weight: bold; font-size: 14px; padding: 10px;")
+        layout.addWidget(info_label)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        self.add_btn = QPushButton("➕ Tambah Pelanggaran")
+        self.add_btn.clicked.connect(self.add_violation)
+        button_layout.addWidget(self.add_btn)
+        
+        self.edit_btn = QPushButton("✏️ Edit Pelanggaran")
+        self.edit_btn.clicked.connect(self.edit_violation)
+        self.edit_btn.setEnabled(False)
+        button_layout.addWidget(self.edit_btn)
+        
+        self.delete_btn = QPushButton("🗑️ Hapus Pelanggaran")
+        self.delete_btn.clicked.connect(self.delete_violation)
+        self.delete_btn.setEnabled(False)
+        button_layout.addWidget(self.delete_btn)
+        
+        button_layout.addStretch()
+        layout.addLayout(button_layout)
+        
+        # Table
+        self.table = QTableWidget()
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(["Jam Mulai", "Jam Selesai", "Keterangan", "Dibuat"])
+        
+        # Table settings - ubah ke Interactive agar pengguna dapat mengubah ukuran kolom
+        header = self.table.horizontalHeader()
+        
+        # Set semua kolom ke Interactive (bisa diubah ukurannya oleh user)
+        for i in range(4):  # Semua kolom
+            header.setSectionResizeMode(i, QHeaderView.Interactive)
+        
+        # Set default width untuk kolom
+        self.table.setColumnWidth(0, 100)  # Jam Mulai
+        self.table.setColumnWidth(1, 100)  # Jam Selesai
+        self.table.setColumnWidth(2, 400)  # Keterangan
+        self.table.setColumnWidth(3, 150)  # Dibuat
+        
+        # Enable stretching table to fill available space
+        self.table.horizontalHeader().setStretchLastSection(True)
+        
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.selectionModel().selectionChanged.connect(self.on_selection_changed)
+        layout.addWidget(self.table)
+        
+        # Close button
+        close_layout = QHBoxLayout()
+        close_layout.addStretch()
+        close_btn = QPushButton("Tutup")
+        close_btn.clicked.connect(self.accept)
+        close_layout.addWidget(close_btn)
+        layout.addLayout(close_layout)
+        
+        self.setLayout(layout)
+    
+    def load_violations(self):
+        """Load violations data into table"""
+        try:
+            violations = self.db_manager.get_violations_by_attendance(self.attendance_id)
+            self.table.setRowCount(len(violations))
+            
+            for row, violation in enumerate(violations):
+                # Store violation ID in first column as hidden data
+                start_item = QTableWidgetItem(violation['start_time'])
+                start_item.setData(Qt.UserRole, violation['id'])  # Store violation ID
+                self.table.setItem(row, 0, start_item)
+                
+                self.table.setItem(row, 1, QTableWidgetItem(violation['end_time']))
+                self.table.setItem(row, 2, QTableWidgetItem(violation['description']))
+                
+                # Format created_at timestamp
+                created_at = violation['created_at']
+                if created_at:
+                    from datetime import datetime
+                    try:
+                        dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                        formatted_date = dt.strftime("%d/%m/%Y %H:%M")
+                    except:
+                        formatted_date = created_at
+                else:
+                    formatted_date = "-"
+                
+                self.table.setItem(row, 3, QTableWidgetItem(formatted_date))
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Gagal memuat data pelanggaran:\n{str(e)}")
+    
+    def on_selection_changed(self):
+        """Handle table selection change"""
+        has_selection = len(self.table.selectionModel().selectedRows()) > 0
+        self.edit_btn.setEnabled(has_selection)
+        self.delete_btn.setEnabled(has_selection)
+    
+    def add_violation(self):
+        """Add new violation"""
+        dialog = ViolationEditDialog(parent=self)
+        if dialog.exec() == QDialog.Accepted:
+            violation_data = dialog.get_violation_data()
+            try:
+                self.db_manager.add_violation(
+                    self.attendance_id,
+                    violation_data['start_time'],
+                    violation_data['end_time'],
+                    violation_data['description']
+                )
+                QMessageBox.information(self, "Sukses", "Pelanggaran berhasil ditambahkan")
+                self.load_violations()  # Refresh table
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Gagal menambah pelanggaran:\n{str(e)}")
+    
+    def edit_violation(self):
+        """Edit selected violation"""
+        selected_rows = self.table.selectionModel().selectedRows()
+        if not selected_rows:
+            return
+        
+        row = selected_rows[0].row()
+        violation_id = self.table.item(row, 0).data(Qt.UserRole)
+        
+        # Get current data
+        start_time = self.table.item(row, 0).text()
+        end_time = self.table.item(row, 1).text()
+        description = self.table.item(row, 2).text()
+        
+        dialog = ViolationEditDialog(start_time, end_time, description, self)
+        if dialog.exec() == QDialog.Accepted:
+            violation_data = dialog.get_violation_data()
+            try:
+                self.db_manager.update_violation(
+                    violation_id,
+                    violation_data['start_time'],
+                    violation_data['end_time'],
+                    violation_data['description']
+                )
+                QMessageBox.information(self, "Sukses", "Pelanggaran berhasil diupdate")
+                self.load_violations()  # Refresh table
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Gagal mengupdate pelanggaran:\n{str(e)}")
+    
+    def delete_violation(self):
+        """Delete selected violation"""
+        selected_rows = self.table.selectionModel().selectedRows()
+        if not selected_rows:
+            return
+        
+        row = selected_rows[0].row()
+        violation_id = self.table.item(row, 0).data(Qt.UserRole)
+        start_time = self.table.item(row, 0).text()
+        end_time = self.table.item(row, 1).text()
+        description = self.table.item(row, 2).text()
+        
+        reply = QMessageBox.question(
+            self, "Konfirmasi Hapus",
+            f"Apakah Anda yakin ingin menghapus pelanggaran ini?\n\n"
+            f"Waktu: {start_time} - {end_time}\n"
+            f"Keterangan: {description}",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            try:
+                self.db_manager.delete_violation(violation_id)
+                QMessageBox.information(self, "Sukses", "Pelanggaran berhasil dihapus")
+                self.load_violations()  # Refresh table
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Gagal menghapus pelanggaran:\n{str(e)}")
+
+class ViolationEditDialog(QDialog):
+    def __init__(self, start_time="", end_time="", description="", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Edit Pelanggaran" if start_time else "Tambah Pelanggaran")
+        self.setModal(True)
+        self.resize(400, 250)
+        
+        layout = QFormLayout()
+        
+        # Waktu mulai dan selesai dengan detik
+        self.start_time = QTimeEdit()
+        self.start_time.setDisplayFormat("HH:mm:ss")
+        if start_time:
+            from PySide6.QtCore import QTime
+            self.start_time.setTime(QTime.fromString(start_time, "HH:mm:ss"))
+        layout.addRow("Jam Mulai:", self.start_time)
+        
+        self.end_time = QTimeEdit()
+        self.end_time.setDisplayFormat("HH:mm:ss")
+        if end_time:
+            from PySide6.QtCore import QTime
+            self.end_time.setTime(QTime.fromString(end_time, "HH:mm:ss"))
+        layout.addRow("Jam Selesai:", self.end_time)
+        
+        # Keterangan
+        self.description = QTextEdit()
+        self.description.setMaximumHeight(100)
+        self.description.setPlainText(description)
+        layout.addRow("Keterangan:", self.description)
+        
+        # Buttons
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+        
+        self.setLayout(layout)
+    
+    def get_violation_data(self):
+        return {
+            'start_time': self.start_time.time().toString("HH:mm:ss"),
+            'end_time': self.end_time.time().toString("HH:mm:ss"),
+            'description': self.description.toPlainText()
+        }
+
 class AttendanceInputTab(QWidget):
     def __init__(self, db_manager, main_window=None):
         super().__init__()
@@ -107,20 +341,33 @@ class AttendanceInputTab(QWidget):
         
         # Table
         self.table = QTableWidget()
-        self.table.setColumnCount(6)
+        self.table.setColumnCount(7)
         self.table.setHorizontalHeaderLabels([
             "Nama Karyawan", "Jam Masuk Kerja", "Jam Keluar Kerja", 
-            "Jam Masuk Lembur", "Jam Keluar Lembur", "Jam Anomali"
+            "Jam Masuk Lembur", "Jam Keluar Lembur", "Jam Anomali", "Kelola Pelanggaran"
         ])
         
         # Make table editable
         self.table.itemChanged.connect(self.on_item_changed)
         
-        # Resize columns
+        # Resize columns - ubah ke Interactive agar pengguna dapat mengubah ukuran kolom
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.Stretch)
-        for i in range(1, 6):
-            header.setSectionResizeMode(i, QHeaderView.ResizeToContents)
+        
+        # Set semua kolom ke Interactive (bisa diubah ukurannya oleh user)
+        for i in range(7):  # Semua kolom termasuk Kelola Pelanggaran
+            header.setSectionResizeMode(i, QHeaderView.Interactive)
+        
+        # Set default width untuk kolom
+        self.table.setColumnWidth(0, 200)  # Nama Karyawan
+        self.table.setColumnWidth(1, 100)  # Jam Masuk Kerja
+        self.table.setColumnWidth(2, 100)  # Jam Keluar Kerja
+        self.table.setColumnWidth(3, 120)  # Jam Masuk Lembur
+        self.table.setColumnWidth(4, 120)  # Jam Keluar Lembur
+        self.table.setColumnWidth(5, 150)  # Jam Anomali
+        self.table.setColumnWidth(6, 120)  # Kelola Pelanggaran
+        
+        # Enable stretching table to fill available space
+        self.table.horizontalHeader().setStretchLastSection(True)
         
         layout.addWidget(self.table)
         
@@ -183,6 +430,12 @@ class AttendanceInputTab(QWidget):
             anomali_item = QTableWidgetItem(anomali_text)
             anomali_item.setFlags(anomali_item.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(row, 5, anomali_item)
+            
+            # Kelola Pelanggaran button
+            manage_btn = QPushButton("Kelola")
+            manage_btn.setMaximumWidth(80)
+            manage_btn.clicked.connect(lambda checked, r=row: self.manage_violations(r))
+            self.table.setCellWidget(row, 6, manage_btn)
     
     def on_item_changed(self, item):
         # Update current_data when table is edited
@@ -356,6 +609,31 @@ class AttendanceInputTab(QWidget):
             else:
                 QMessageBox.warning(self, "Warning", "Data absensi karyawan tidak ditemukan")
     
+    def manage_violations(self, row):
+        """Open violation management dialog for selected employee"""
+        if row >= len(self.current_data):
+            QMessageBox.warning(self, "Warning", "Data karyawan tidak valid")
+            return
+        
+        employee_data = self.current_data[row]
+        employee_name = employee_data['Nama']
+        
+        # Get attendance_id from database
+        selected_date = self.date_edit.date().toString("yyyy-MM-dd")
+        attendance_data = self.db_manager.get_attendance_by_date(selected_date)
+        
+        attendance_id = None
+        for att in attendance_data:
+            if att['Nama'] == employee_name:
+                attendance_id = att['id']
+                break
+        
+        if attendance_id:
+            dialog = ViolationManagementDialog(self.db_manager, attendance_id, employee_name, self)
+            dialog.exec()
+        else:
+            QMessageBox.warning(self, "Warning", "Data absensi karyawan tidak ditemukan di database")
+    
     def check_database_status(self):
         """Check dan tampilkan status database"""
         status = check_database_status()
@@ -494,14 +772,31 @@ class ReportTab(QWidget):
             "Jam Kerja", "Jam Lembur", "Overtime", "Keterlambatan", "Status", "Keterangan"
         ])
         
-        # Resize columns
+        # Resize columns - ubah ke Interactive agar pengguna dapat mengubah ukuran kolom
         header = self.report_table.horizontalHeader()
-        for i in range(10):  # Kolom 0-9 (semua kecuali keterangan)
-            header.setSectionResizeMode(i, QHeaderView.ResizeToContents)
         
-        # Kolom keterangan (index 10) dibuat lebih lebar dan stretch
-        header.setSectionResizeMode(10, QHeaderView.Stretch)
-        self.report_table.setColumnWidth(10, 300)  # Minimum width untuk kolom keterangan
+        # Set semua kolom ke Interactive (bisa diubah ukurannya oleh user)
+        for i in range(11):  # Semua kolom termasuk keterangan
+            header.setSectionResizeMode(i, QHeaderView.Interactive)
+        
+        # Set default width untuk kolom
+        self.report_table.setColumnWidth(0, 100)  # Tanggal
+        self.report_table.setColumnWidth(1, 80)   # Jam Masuk
+        self.report_table.setColumnWidth(2, 80)   # Jam Keluar
+        self.report_table.setColumnWidth(3, 120)  # Jam Masuk Lembur
+        self.report_table.setColumnWidth(4, 120)  # Jam Keluar Lembur
+        self.report_table.setColumnWidth(5, 100)  # Jam Kerja
+        self.report_table.setColumnWidth(6, 100)  # Jam Lembur
+        self.report_table.setColumnWidth(7, 100)  # Overtime
+        self.report_table.setColumnWidth(8, 100)  # Keterlambatan
+        self.report_table.setColumnWidth(9, 80)   # Status
+        self.report_table.setColumnWidth(10, 300) # Keterangan
+        
+        # Enable stretching table to fill available space
+        self.report_table.horizontalHeader().setStretchLastSection(True)
+        
+        # Enable sorting when clicking on headers
+        self.report_table.setSortingEnabled(True)
         
         # Enable word wrap untuk semua cells
         self.report_table.setWordWrap(True)
@@ -718,7 +1013,8 @@ PENGATURAN:
             if 'id' in data and data['id']:
                 violations = self.db_manager.get_violations_by_attendance(data['id'])
                 if violations:
-                    # Format: "12:00:30-13:00:45 Main HP | 15:00:15-15:30:20 Istirahat tanpa konfirmasi"
+                    # Format: setiap pelanggaran dalam baris terpisah (newline)
+                    # "12:30:00-23:00:00 Tidur\n14:30:00-15:00:00 makan"
                     violation_details = []
                     for violation in violations:
                         start_time = violation['start_time']  # Already in HH:mm:ss format
@@ -726,7 +1022,7 @@ PENGATURAN:
                         description = violation['description']
                         violation_details.append(f"{start_time}-{end_time} {description}")
                     
-                    keterangan = " | ".join(violation_details)
+                    keterangan = "\n".join(violation_details)  # Use newline instead of " | "
             
             # Set keterangan dengan word wrap untuk text panjang
             keterangan_item = QTableWidgetItem(keterangan)
@@ -965,8 +1261,12 @@ PENGATURAN:
                     if col in [0, 1, 2, 3, 4, 9]:  # Date and time columns, status
                         excel_cell.alignment = Alignment(horizontal="center")
                     elif col == 10:  # Kolom Keterangan
-                        # Enable text wrapping untuk kolom keterangan
+                        # Enable text wrapping untuk kolom keterangan dan set row height
                         excel_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+                        # Set minimum row height untuk menampung multiple lines
+                        if '\n' in cell_value:
+                            line_count = cell_value.count('\n') + 1
+                            ws.row_dimensions[row+5].height = max(15 * line_count, 30)
                     else:
                         excel_cell.alignment = Alignment(horizontal="left", vertical="center")
             
@@ -1194,10 +1494,20 @@ class ShiftManagementTab(QWidget):
         self.employee_table.setColumnCount(3)
         self.employee_table.setHorizontalHeaderLabels(["Nama Karyawan", "Shift Saat Ini", "Aksi"])
         
+        # Table settings - ubah ke Interactive agar pengguna dapat mengubah ukuran kolom
         header = self.employee_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        
+        # Set semua kolom ke Interactive (bisa diubah ukurannya oleh user)
+        for i in range(3):  # Semua kolom
+            header.setSectionResizeMode(i, QHeaderView.Interactive)
+        
+        # Set default width untuk kolom
+        self.employee_table.setColumnWidth(0, 250)  # Nama Karyawan
+        self.employee_table.setColumnWidth(1, 150)  # Shift Saat Ini
+        self.employee_table.setColumnWidth(2, 150)  # Aksi
+        
+        # Enable stretching table to fill available space
+        self.employee_table.horizontalHeader().setStretchLastSection(True)
         
         right_layout.addWidget(self.employee_table)
         
