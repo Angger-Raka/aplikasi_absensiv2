@@ -4,9 +4,9 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QTabWidget, QWidget,
                                QPushButton, QDateEdit, QLabel, QFileDialog, QMessageBox,
                                QHeaderView, QComboBox, QTimeEdit, QTextEdit, QDialog,
                                QFormLayout, QDialogButtonBox, QGroupBox, QRadioButton,
-                               QSpinBox, QSplitter, QLineEdit)
-from PySide6.QtCore import Qt, QDate, QTime
-from PySide6.QtGui import QFont
+                               QSpinBox, QSplitter, QLineEdit, QCalendarWidget)
+from PySide6.QtCore import Qt, QDate, QTime, QLocale, Signal
+from PySide6.QtGui import QFont, QTextCharFormat, QColor
 from datetime import datetime, date, timedelta
 import traceback
 
@@ -16,6 +16,41 @@ from database_utils import check_database_status, force_unlock_database, diagnos
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+class IndonesianCalendar(QCalendarWidget):
+    """Kalender custom dengan bahasa Indonesia dan tanggal merah untuk hari Minggu"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        
+        # Set locale ke Indonesia
+        locale = QLocale(QLocale.Indonesian, QLocale.Indonesia)
+        self.setLocale(locale)
+        
+        # Nama hari dalam bahasa Indonesia
+        self.setHorizontalHeaderFormat(QCalendarWidget.LongDayNames)
+        
+        # Format untuk hari Minggu (tanggal merah)
+        sunday_format = QTextCharFormat()
+        sunday_format.setForeground(QColor(255, 0, 0))  # Merah
+        sunday_format.setBackground(QColor(255, 230, 230))  # Background pink muda
+        self.setWeekdayTextFormat(Qt.Sunday, sunday_format)
+
+class IndonesianDateEdit(QDateEdit):
+    """DateEdit dengan kalender bahasa Indonesia dan tanggal merah"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCalendarPopup(True)
+        
+        # Buat custom calendar popup
+        calendar = IndonesianCalendar(self)
+        self.setCalendarWidget(calendar)
+        
+        # Set format tampilan tanggal
+        self.setDisplayFormat("dd MMMM yyyy")
+        
+        # Set locale ke Indonesia untuk format tanggal
+        locale = QLocale(QLocale.Indonesian, QLocale.Indonesia)
+        self.setLocale(locale)
 
 class ViolationDialog(QDialog):
     def __init__(self, employees, parent=None):
@@ -311,11 +346,10 @@ class AttendanceInputTab(QWidget):
         # Top controls
         controls_layout = QHBoxLayout()
         
-        # Date picker
+        # Date picker dengan format Indonesia
         controls_layout.addWidget(QLabel("Tanggal:"))
-        self.date_edit = QDateEdit()
+        self.date_edit = IndonesianDateEdit()
         self.date_edit.setDate(QDate.currentDate())
-        self.date_edit.setCalendarPopup(True)
         self.date_edit.dateChanged.connect(self.load_attendance_data)
         controls_layout.addWidget(self.date_edit)
         
@@ -326,8 +360,15 @@ class AttendanceInputTab(QWidget):
         self.import_btn.clicked.connect(self.import_excel)
         controls_layout.addWidget(self.import_btn)
         
-        # Save button
-        self.save_btn = QPushButton("Save to Database")
+        # Refresh button
+        self.refresh_btn = QPushButton("🔄 Refresh Data")
+        self.refresh_btn.setToolTip("Muat ulang data dari database untuk tanggal yang dipilih")
+        self.refresh_btn.clicked.connect(self.refresh_data)
+        controls_layout.addWidget(self.refresh_btn)
+        
+        # Save button - ganti dengan Save/Update
+        self.save_btn = QPushButton("Save/Update Data")
+        self.save_btn.setToolTip("Simpan data baru atau update data yang sudah ada")
         self.save_btn.clicked.connect(self.save_to_database)
         self.save_btn.setEnabled(False)
         controls_layout.addWidget(self.save_btn)
@@ -402,6 +443,7 @@ class AttendanceInputTab(QWidget):
                     self.current_data = data
                     self.populate_table(data)
                     self.save_btn.setEnabled(True)
+                    self.save_btn.setText("Save Data")  # Ubah teks tombol menjadi Save Data
                     self.add_violation_btn.setEnabled(True)
                     QMessageBox.information(self, "Sukses", f"Berhasil import {len(data)} data karyawan")
                 else:
@@ -431,11 +473,36 @@ class AttendanceInputTab(QWidget):
             anomali_item.setFlags(anomali_item.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(row, 5, anomali_item)
             
-            # Kelola Pelanggaran button
+            # Kelola Pelanggaran button dengan info total pelanggaran
+            violations_widget = QWidget()
+            violations_layout = QHBoxLayout(violations_widget)
+            violations_layout.setContentsMargins(2, 2, 2, 2)
+            violations_layout.setSpacing(5)
+            
+            # Tombol Kelola
             manage_btn = QPushButton("Kelola")
             manage_btn.setMaximumWidth(80)
             manage_btn.clicked.connect(lambda checked, r=row: self.manage_violations(r))
-            self.table.setCellWidget(row, 6, manage_btn)
+            violations_layout.addWidget(manage_btn)
+            
+            # Label total pelanggaran
+            violations_count = 0
+            if 'id' in item and item['id']:
+                try:
+                    violations = self.db_manager.get_violations_by_attendance(item['id'])
+                    violations_count = len(violations) if violations else 0
+                except:
+                    pass
+            
+            count_label = QLabel(f"({violations_count} pelanggaran)")
+            if violations_count > 0:
+                count_label.setStyleSheet("color: red; font-weight: bold;")
+            else:
+                count_label.setStyleSheet("color: gray;")
+            violations_layout.addWidget(count_label)
+            
+            violations_layout.addStretch()
+            self.table.setCellWidget(row, 6, violations_widget)
     
     def on_item_changed(self, item):
         # Update current_data when table is edited
@@ -571,10 +638,61 @@ class AttendanceInputTab(QWidget):
             self.current_data = data
             self.populate_table(data)
             self.add_violation_btn.setEnabled(True)
+            # Aktifkan tombol Save/Update jika data sudah ada
+            self.save_btn.setEnabled(True)
+            self.save_btn.setText("Update Data")
         else:
             self.table.setRowCount(0)
             self.current_data = []
             self.add_violation_btn.setEnabled(False)
+            # Reset tombol Save/Update
+            self.save_btn.setEnabled(False)
+            self.save_btn.setText("Save/Update Data")
+    
+    def refresh_data(self):
+        """Refresh data dari database untuk tanggal yang dipilih"""
+        try:
+            # Simpan posisi scroll saat ini
+            scroll_pos = self.table.verticalScrollBar().value()
+            
+            # Ambil tanggal yang dipilih
+            selected_date = self.date_edit.date().toString("yyyy-MM-dd")
+            
+            # Tampilkan loading indicator
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            
+            # Ambil data terbaru dari database
+            data = self.db_manager.get_attendance_by_date(selected_date)
+            
+            if data:
+                self.current_data = data
+                self.populate_table(data)
+                self.add_violation_btn.setEnabled(True)
+                self.save_btn.setEnabled(True)
+                self.save_btn.setText("Update Data")
+                
+                # Kembalikan posisi scroll
+                self.table.verticalScrollBar().setValue(scroll_pos)
+                
+                # Tampilkan pesan sukses
+                QMessageBox.information(self, "Refresh Berhasil", 
+                                       f"Data untuk tanggal {self.date_edit.date().toString('dd MMMM yyyy')} berhasil dimuat ulang.\n\n"
+                                       f"Total data: {len(data)} karyawan")
+            else:
+                self.table.setRowCount(0)
+                self.current_data = []
+                self.add_violation_btn.setEnabled(False)
+                self.save_btn.setEnabled(False)
+                self.save_btn.setText("Save/Update Data")
+                
+                # Tampilkan pesan tidak ada data
+                QMessageBox.information(self, "Tidak Ada Data", 
+                                       f"Tidak ada data absensi untuk tanggal {self.date_edit.date().toString('dd MMMM yyyy')}.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Gagal memuat data:\n{str(e)}")
+        finally:
+            # Kembalikan cursor normal
+            QApplication.restoreOverrideCursor()
     
     def add_violation(self):
         if not self.current_data:
@@ -725,18 +843,19 @@ class ReportTab(QWidget):
         self.load_employees()
         form_layout.addRow("Pilih Karyawan:", self.employee_combo)
         
-        # Date range
+        # Date range dengan format Indonesia
         date_layout = QHBoxLayout()
-        self.start_date = QDateEdit()
+        
+        # Tanggal mulai dengan format Indonesia
+        self.start_date = IndonesianDateEdit()
         self.start_date.setDate(QDate.currentDate().addDays(-30))
-        self.start_date.setCalendarPopup(True)
         date_layout.addWidget(self.start_date)
         
         date_layout.addWidget(QLabel(" - "))
         
-        self.end_date = QDateEdit()
+        # Tanggal akhir dengan format Indonesia
+        self.end_date = IndonesianDateEdit()
         self.end_date.setDate(QDate.currentDate())
-        self.end_date.setCalendarPopup(True)
         date_layout.addWidget(self.end_date)
         
         form_layout.addRow("Periode:", date_layout)
