@@ -2,165 +2,190 @@ import pandas as pd
 import json
 import os
 import warnings
-
-# Abaikan warning format Excel lama agar output bersih
-warnings.filterwarnings("ignore")
-
-# Suppress specific warnings untuk file Excel dengan OLE2 inconsistency
 import sys
-if not sys.warnoptions:
-    warnings.simplefilter("ignore")
-    
-# Suppress xlrd warnings specifically
-warnings.filterwarnings("ignore", category=UserWarning, module="xlrd")
-warnings.filterwarnings("ignore", message=".*OLE2 inconsistency.*")
-warnings.filterwarnings("ignore", message=".*file size.*not.*multiple of sector size.*")
+import contextlib
+
+# --- BAGIAN 1: KONFIGURASI MEMBISUKAN WARNING ---
+@contextlib.contextmanager
+def suppress_output():
+    with open(os.devnull, "w") as devnull:
+        old_stdout = sys.stdout
+        old_stderr = sys.stderr
+        try:
+            sys.stdout = devnull
+            sys.stderr = devnull
+            yield
+        finally:
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
+
+warnings.filterwarnings("ignore")
 
 class ExcelProcessor:
     @staticmethod
     def _extract_from_dataframe(df):
         """
-        Helper function: Mencari data absensi dari DataFrame apapun (Excel/CSV/HTML)
+        Helper function: Mencari data absensi dari DataFrame.
+        Disodorkan untuk struktur file Grid++Report CSV.
         """
         results = []
         if df.empty:
             return results
 
+        # Normalisasi seluruh DataFrame menjadi string uppercase
+        df_str = df.astype(str).apply(lambda x: x.str.strip().str.upper())
+
         for i in range(len(df)):
             row = df.iloc[i]
+            row_upper = df_str.iloc[i].tolist()
             
-            # Konversi baris jadi list string, bersihkan NaN, dan strip spasi
-            # Gunakan .upper() untuk normalisasi pencarian
-            row_str_list = [str(x).strip() if pd.notna(x) else "" for x in row.tolist()]
-            row_str_upper = [x.upper() for x in row_str_list]
+            # --- TAHAP 1: MENCARI BARIS HEADER NAMA ---
+            found_index = -1
             
-            # Cari kata kunci "NAME" (Case Insensitive)
-            if "NAME" in row_str_upper:
+            # Kata kunci yang mungkin muncul di header
+            possible_keywords = ["NAME", "NAMA", "ENM NO", "PEGAWAI", "KARYAWAN"]
+            
+            for keyword in possible_keywords:
+                if keyword in row_upper:
+                    found_index = row_upper.index(keyword)
+                    break
+            
+            # Jika ketemu label "NAME" atau sejenisnya
+            if found_index != -1:
                 try:
-                    # Ambil index kolom "Name"
-                    name_index = row_str_upper.index("NAME")
+                    # --- TAHAP 2: MENGAMBIL VALUE NAMA ---
+                    nama_karyawan = "Unknown"
                     
-                    # Logika: Nama karyawan ada di 2 kolom sebelah kanannya
-                    if name_index + 2 < len(row):
-                        nama_karyawan = row.iloc[name_index + 2]
-                    else:
-                        nama_karyawan = "Unknown"
-                    
-                    # Validasi nama
-                    if pd.isna(nama_karyawan) or str(nama_karyawan).strip() in ['', 'nan', 'None']:
+                    # Cek kolom di sebelah kanan label (index + 1)
+                    if found_index + 1 < len(row):
+                        val = str(row.iloc[found_index + 1]).strip()
+                        if val and val.lower() not in ['nan', 'none', ':', '=', '']:
+                            nama_karyawan = val
+                        # Jika +1 kosong, coba +2 (kadang ada spasi kosong diantaranya)
+                        elif found_index + 2 < len(row):
+                            val2 = str(row.iloc[found_index + 2]).strip()
+                            if val2 and val2.lower() not in ['nan', 'none']:
+                                nama_karyawan = val2
+
+                    # Validasi nama (skip jika tidak valid)
+                    if nama_karyawan in ["Unknown", "nan", "None", ""]:
                         continue
                     
-                    # Ambil Data Jam di baris bawahnya (i + 1), kolom yang sama dengan kolom awal (biasanya 0)
-                    # Note: Di Grid++Report, jam seringkali di kolom paling kiri (index 0), 
-                    # tapi kita coba ambil dari kolom 0 dulu sebagai default.
+                    # --- TAHAP 3: MENGAMBIL JAM (LOGIKA BARU) ---
+                    # Data jam ada di baris tepat di bawah nama (i + 1)
+                    jam_list = []
+                    
                     if i + 1 < len(df):
-                        raw_time_data = df.iloc[i+1, 0] 
+                        next_row = df.iloc[i+1]
                         
-                        if pd.isna(raw_time_data):
-                            jam_list = []
-                        else:
-                            raw_time_str = str(raw_time_data)
-                            if not raw_time_str.strip():
-                                jam_list = []
-                            else:
-                                jam_list = [
-                                    t.strip().replace('.', ':') 
-                                    for t in raw_time_str.splitlines() 
-                                    if t.strip()
-                                ]
-                    else:
-                        jam_list = []
+                        # Gabungkan semua sel di baris bawah menjadi satu string panjang
+                        # Ini penting karena format CSV Anda menumpuk jam dengan \n di satu sel
+                        clean_values = [str(x).strip() for x in next_row if str(x).lower() not in ['nan', 'none', '']]
+                        full_row_str = "\n".join(clean_values)
+                        
+                        if full_row_str:
+                            # Split berdasarkan baris baru atau spasi, lalu bersihkan
+                            raw_tokens = full_row_str.replace('\n', ' ').split()
+                            
+                            jam_list = [
+                                t.strip().replace('.', ':') 
+                                for t in raw_tokens
+                                if (':' in str(t) or '.' in str(t)) and len(t) >= 4 # Validasi format jam
+                            ]
 
-                    # Mapping ke JSON
+                    # --- TAHAP 4: MAPPING JAM KE STRUKTUR (SESUAI REQUEST) ---
                     entry = {
                         "Nama": str(nama_karyawan).strip(),
-                        "Jam Masuk": None,
-                        "Jam Keluar": None,
-                        "Jam Masuk Lembur": None,
-                        "Jam Keluar Lembur": None,
-                        "Jam Anomali": []
+                        "Jam Masuk": None,            # Data ke-1
+                        "Jam Keluar": None,           # Data ke-2
+                        "Jam Masuk Lembur": None,     # Data ke-3
+                        "Jam Keluar Lembur": None,    # Data ke-4
+                        "Jam Anomali": [],            # Data ke-5 dst
+                        "Total Scan": len(jam_list)
                     }
 
-                    if len(jam_list) >= 1: entry["Jam Masuk"] = jam_list[0]
-                    if len(jam_list) >= 2: entry["Jam Keluar"] = jam_list[1]
-                    if len(jam_list) >= 3: entry["Jam Masuk Lembur"] = jam_list[2]
-                    if len(jam_list) >= 4: entry["Jam Keluar Lembur"] = jam_list[3]
-                    if len(jam_list) > 4:  entry["Jam Anomali"] = jam_list[4:]
+                    # Logika Mapping Urutan (Opsi B: Ganjil dibiarkan kosong di akhir)
+                    if len(jam_list) > 0:
+                        entry["Jam Masuk"] = jam_list[0]
+                    
+                    if len(jam_list) > 1:
+                        entry["Jam Keluar"] = jam_list[1]
+                        
+                    if len(jam_list) > 2:
+                        entry["Jam Masuk Lembur"] = jam_list[2]
+                        
+                    if len(jam_list) > 3:
+                        entry["Jam Keluar Lembur"] = jam_list[3]
+                        
+                    # Jika ada lebih dari 4 kali scan, sisanya masuk anomali
+                    if len(jam_list) > 4:
+                        entry["Jam Anomali"] = jam_list[4:]
 
                     results.append(entry)
 
-                except Exception as e:
-                    # print(f"Warning: Lewati baris {i} karena error logic: {e}")
+                except Exception:
                     continue
         return results
 
     @staticmethod
     def process_excel_log(file_path):
-        """
-        Fungsi Hybrid Ultra-Robust: 
-        Mencoba segala cara (Excel All Sheets -> HTML -> CSV) untuk mendapatkan data.
-        """
         if not os.path.exists(file_path):
-            raise FileNotFoundError(f"FATAL ERROR: File tidak ditemukan di lokasi: '{file_path}'")
+            raise FileNotFoundError(f"File tidak ditemukan: '{file_path}'")
         
         final_results = []
         
-        # --- STRATEGI 1: BACA SEBAGAI EXCEL (SEMUA SHEET) ---
-        # Ini menangani file .xls binary (OLE2) meskipun ada warning
-        try:
-            # sheet_name=None artinya baca SEMUA sheet menjadi dictionary
-            all_sheets = pd.read_excel(file_path, header=None, sheet_name=None)
-            for sheet_name, df in all_sheets.items():
-                # print(f"Mencoba scan sheet: {sheet_name}...")
-                sheet_results = ExcelProcessor._extract_from_dataframe(df)
-                final_results.extend(sheet_results)
-        except Exception as e:
-            # print(f"Mode Excel gagal: {e}")
-            pass
-            
-        # Jika Strategi 1 berhasil dapat data, langsung return
-        if final_results:
-            return final_results
+        # --- STRATEGI BACA FILE ---
+        # Karena file Anda sebenarnya adalah CSV (meski ekstensi .xls), 
+        # kita prioritaskan pembacaan teks/csv.
+        
+        separators = [',', '\t', ';', '|']
+        file_read_success = False
 
-        # --- STRATEGI 2: BACA SEBAGAI HTML ---
-        # Banyak file .xls "palsu" dari sistem report sebenarnya adalah HTML Table
-        try:
-            dfs_html = pd.read_html(file_path)
-            for df in dfs_html:
-                html_results = ExcelProcessor._extract_from_dataframe(df)
-                final_results.extend(html_results)
-        except Exception:
-            pass
+        # Coba baca sebagai CSV (Prioritas Utama untuk format Grid++Report)
+        for sep in separators:
+            try:
+                # Header=None penting agar baris pertama tidak dianggap judul kolom
+                df_csv = pd.read_csv(file_path, header=None, sep=sep, encoding='latin1', engine='python', on_bad_lines='skip')
+                
+                # Cek sekilas apakah dataframe masuk akal (punya cukup kolom/baris)
+                if not df_csv.empty and len(df_csv) > 1:
+                    res = ExcelProcessor._extract_from_dataframe(df_csv)
+                    if res:
+                        final_results.extend(res)
+                        file_read_success = True
+                        break 
+            except Exception:
+                pass
 
-        if final_results:
-            return final_results
-
-        # --- STRATEGI 3: BACA SEBAGAI TEXT/CSV (Fallback Terakhir) ---
-        # Menangani file text yang dipaksa jadi .xls atau file yang sangat corrupt header-nya
-        try:
-            df_csv = pd.read_csv(file_path, header=None, encoding='latin1', names=range(50))
-            csv_results = ExcelProcessor._extract_from_dataframe(df_csv)
-            final_results.extend(csv_results)
-        except Exception:
-            pass
+        # Jika gagal baca sebagai CSV, coba baca sebagai Excel biasa (Fallback)
+        if not file_read_success and not final_results:
+            try:
+                with suppress_output():
+                    all_sheets = pd.read_excel(file_path, header=None, sheet_name=None)
+                    for _, df in all_sheets.items():
+                        final_results.extend(ExcelProcessor._extract_from_dataframe(df))
+            except Exception:
+                pass
 
         return final_results
 
 # --- Bagian Eksekusi ---
 if __name__ == "__main__":
-    # Path file sesuai request user
-    file_name = "./DATA TEST/Attendance log 21 Nov.xls"
+    # Ganti nama file di sini sesuai kebutuhan
+    file_name = "./DATA TEST/Attendance log 26.xls" 
 
+    print(f"Sedang memproses: {file_name} ...")
+    
     try:
         processor = ExcelProcessor()
         data_json = processor.process_excel_log(file_name)
         
         if not data_json:
-            print("Peringatan: File terbaca tapi DATA KOSONG. Kemungkinan format isi file berubah total atau file corrupt parah.")
+            print("\n[INFO] Tidak ditemukan data yang cocok.")
+            print("Pastikan file memiliki header 'Name' atau 'Nama' dan format jam di baris bawahnya.")
         else:
+            print(f"\n[SUKSES] Ditemukan {len(data_json)} data karyawan.\n")
             print(json.dumps(data_json, indent=4))
             
-    except FileNotFoundError as e:
-        print("!!!" * 10)
-        print(e)
-        print("!!!" * 10)
+    except Exception as e:
+        print(f"Error: {e}")
