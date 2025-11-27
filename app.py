@@ -1316,7 +1316,7 @@ PENGATURAN:
         return 0.0
     
     def calculate_overtime(self, data, shift_settings, day_of_week):
-        """Calculate overtime based on shift settings and day"""
+        """Calculate overtime: lebih dari 1 jam setelah jam pulang kerja normal"""
         # Sunday has no overtime
         if day_of_week == 6:
             return 0.0
@@ -1327,42 +1327,25 @@ PENGATURAN:
         try:
             keluar = datetime.strptime(data['jam_keluar'], "%H:%M")
             
-            # Get overtime limit based on day
+            # Get scheduled work end time based on day (bukan overtime_limit!)
             if day_of_week == 5:  # Saturday
-                batas = datetime.strptime(shift_settings['saturday_overtime_limit'], "%H:%M")
+                jadwal_selesai = datetime.strptime(shift_settings['saturday_work_end'], "%H:%M")
             else:  # Monday-Friday
-                batas = datetime.strptime(shift_settings['weekday_overtime_limit'], "%H:%M")
+                jadwal_selesai = datetime.strptime(shift_settings['weekday_work_end'], "%H:%M")
             
-            # If there's lembur time, calculate overtime until jam_masuk_lembur
-            if data['jam_masuk_lembur']:
-                try:
-                    jam_masuk_lembur = datetime.strptime(data['jam_masuk_lembur'], "%H:%M")
-                    
-                    # Overtime is from batas_overtime to jam_masuk_lembur (if keluar > batas)
-                    if keluar > batas:
-                        # Use the earlier time between jam_keluar and jam_masuk_lembur
-                        end_overtime = min(keluar, jam_masuk_lembur)
-                        
-                        if end_overtime > batas:
-                            diff = end_overtime - batas
-                            minutes = diff.total_seconds() / 60
-                            
-                            if shift_settings['overtime_mode'] == 'per_jam':
-                                return minutes // 60  # Only count full hours
-                            else:
-                                return minutes / 60  # Count all minutes
-                except:
-                    pass
-            else:
-                # No lembur, calculate normal overtime
-                if keluar > batas:
-                    diff = keluar - batas
-                    minutes = diff.total_seconds() / 60
+            # Calculate extra time worked
+            if keluar > jadwal_selesai:
+                extra_minutes = (keluar - jadwal_selesai).total_seconds() / 60
+                
+                # Overtime mulai dari 1 jam (60 menit) setelah jam pulang normal
+                if extra_minutes > 60:
+                    overtime_minutes = extra_minutes - 60  # Kurangi 60 menit pertama (itu loyalitas)
                     
                     if shift_settings['overtime_mode'] == 'per_jam':
-                        return minutes // 60  # Only count full hours
+                        return (overtime_minutes // 60) / 60  # Only count full hours, convert to hours
                     else:
-                        return minutes / 60  # Count all minutes
+                        return overtime_minutes / 60  # Count all minutes, convert to hours
+                        
         except:
             pass
         
@@ -1612,6 +1595,12 @@ PENGATURAN:
                     ws.cell(row=excel_row, column=9).value = self.format_time_duration(overtime, "menit_only") if overtime > 0 else "-"
                     ws.cell(row=excel_row, column=10).value = self.format_time_duration(terlambat / 60, "menit_only") if terlambat > 0 else "-"
                     ws.cell(row=excel_row, column=11).value = "Hadir"
+                    
+                    # Highlight orange untuk keterlambatan
+                    if terlambat > 0:
+                        orange_fill = PatternFill(start_color="FFA500", end_color="FFA500", fill_type="solid")
+                        for col in range(1, 14):
+                            ws.cell(row=excel_row, column=col).fill = orange_fill
                 else:
                     # Empty day
                     ws.cell(row=excel_row, column=6).value = "-"
@@ -1623,9 +1612,10 @@ PENGATURAN:
                     # Mark Sunday or empty day
                     if day_of_week == 6:  # Sunday
                         ws.cell(row=excel_row, column=11).value = "Minggu"
-                        # Color Sunday rows differently
+                        # Highlight Sunday rows with red color
+                        red_fill = PatternFill(start_color="FFE6E6", end_color="FFE6E6", fill_type="solid")
                         for col in range(1, 14):
-                            ws.cell(row=excel_row, column=col).fill = PatternFill(start_color="F0F0F0", end_color="F0F0F0", fill_type="solid")
+                            ws.cell(row=excel_row, column=col).fill = red_fill
                     else:
                         ws.cell(row=excel_row, column=11).value = "Tidak Hadir"
                 
