@@ -382,9 +382,9 @@ class AttendanceInputTab(QWidget):
         
         # Table
         self.table = QTableWidget()
-        self.table.setColumnCount(7)
+        self.table.setColumnCount(8)
         self.table.setHorizontalHeaderLabels([
-            "Nama Karyawan", "Jam Masuk Kerja", "Jam Keluar Kerja", 
+            "Nama Karyawan", "Shift", "Jam Masuk Kerja", "Jam Keluar Kerja", 
             "Jam Masuk Lembur", "Jam Keluar Lembur", "Jam Anomali", "Kelola Pelanggaran"
         ])
         
@@ -395,17 +395,18 @@ class AttendanceInputTab(QWidget):
         header = self.table.horizontalHeader()
         
         # Set semua kolom ke Interactive (bisa diubah ukurannya oleh user)
-        for i in range(7):  # Semua kolom termasuk Kelola Pelanggaran
+        for i in range(8):  # Semua kolom termasuk Shift dan Kelola Pelanggaran
             header.setSectionResizeMode(i, QHeaderView.Interactive)
         
         # Set default width untuk kolom
-        self.table.setColumnWidth(0, 200)  # Nama Karyawan
-        self.table.setColumnWidth(1, 100)  # Jam Masuk Kerja
-        self.table.setColumnWidth(2, 100)  # Jam Keluar Kerja
-        self.table.setColumnWidth(3, 120)  # Jam Masuk Lembur
-        self.table.setColumnWidth(4, 120)  # Jam Keluar Lembur
-        self.table.setColumnWidth(5, 150)  # Jam Anomali
-        self.table.setColumnWidth(6, 120)  # Kelola Pelanggaran
+        self.table.setColumnWidth(0, 180)  # Nama Karyawan
+        self.table.setColumnWidth(1, 120)  # Shift
+        self.table.setColumnWidth(2, 100)  # Jam Masuk Kerja
+        self.table.setColumnWidth(3, 100)  # Jam Keluar Kerja
+        self.table.setColumnWidth(4, 120)  # Jam Masuk Lembur
+        self.table.setColumnWidth(5, 120)  # Jam Keluar Lembur
+        self.table.setColumnWidth(6, 150)  # Jam Anomali
+        self.table.setColumnWidth(7, 120)  # Kelola Pelanggaran
         
         # Enable stretching table to fill available space
         self.table.horizontalHeader().setStretchLastSection(True)
@@ -435,6 +436,9 @@ class AttendanceInputTab(QWidget):
         )
         
         if file_path:
+            # Show loading cursor
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            
             try:
                 processor = ExcelProcessor()
                 data = processor.process_excel_log(file_path)
@@ -449,11 +453,42 @@ class AttendanceInputTab(QWidget):
                 else:
                     QMessageBox.warning(self, "Warning", "Tidak ada data yang berhasil diproses dari file Excel")
                     
+            except FileNotFoundError as e:
+                QMessageBox.critical(self, "File Tidak Ditemukan", str(e))
             except Exception as e:
-                QMessageBox.critical(self, "Error", f"Gagal membaca file Excel:\n{str(e)}")
+                error_msg = str(e)
+                if "OLE2 inconsistency" in error_msg or "file size" in error_msg:
+                    QMessageBox.critical(
+                        self, "Error Format Excel", 
+                        f"File Excel memiliki format yang tidak standar (umum pada file dari alat presensi lama).\n\n"
+                        f"Solusi yang bisa dicoba:\n"
+                        f"1. Buka file Excel dan Save As dengan format .xlsx\n"
+                        f"2. Gunakan Excel versi terbaru untuk menyimpan file\n"
+                        f"3. Export ulang dari alat presensi dengan format yang lebih baru\n\n"
+                        f"Catatan: File mungkin masih bisa diproses meskipun ada warning.\n\n"
+                        f"Detail error: {error_msg}"
+                    )
+                elif "DATA KOSONG" in error_msg or "tidak mengandung data" in error_msg:
+                    QMessageBox.warning(
+                        self, "Data Kosong",
+                        f"File Excel berhasil dibaca tapi tidak mengandung data absensi yang dapat diproses.\n\n"
+                        f"Kemungkinan penyebab:\n"
+                        f"1. Format file berbeda dari yang diharapkan\n"
+                        f"2. File kosong atau tidak mengandung data karyawan\n"
+                        f"3. Struktur data dalam file berubah\n\n"
+                        f"Pastikan file Excel berisi data absensi dengan format yang benar."
+                    )
+                else:
+                    QMessageBox.critical(self, "Error", f"Gagal membaca file Excel:\n{error_msg}")
+            finally:
+                # Restore normal cursor
+                QApplication.restoreOverrideCursor()
     
     def populate_table(self, data):
         self.table.setRowCount(len(data))
+        
+        # Get all shifts for dropdown
+        shifts = self.db_manager.get_all_shifts()
         
         for row, item in enumerate(data):
             # Nama (read-only)
@@ -461,17 +496,48 @@ class AttendanceInputTab(QWidget):
             name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(row, 0, name_item)
             
+            # Shift dropdown
+            shift_combo = QComboBox()
+            for shift in shifts:
+                shift_combo.addItem(shift['name'], shift['id'])
+            
+            # Set current shift - prioritas: shift_id dari data, lalu shift default karyawan, lalu shift 1
+            current_shift_id = item.get('shift_id')
+            if not current_shift_id:
+                # Cari shift default karyawan dari database
+                try:
+                    employee_data = self.db_manager.get_employee_by_name(item['Nama'])
+                    if employee_data:
+                        current_shift_id = employee_data.get('shift_id', 1)
+                    else:
+                        current_shift_id = 1
+                except:
+                    current_shift_id = 1
+            
+            shift_index = shift_combo.findData(current_shift_id)
+            if shift_index >= 0:
+                shift_combo.setCurrentIndex(shift_index)
+            
+            # Update current_data dengan shift_id yang benar
+            item['shift_id'] = current_shift_id
+            
+            # Connect change event
+            shift_combo.currentIndexChanged.connect(
+                lambda idx, r=row, combo=shift_combo: self.on_shift_changed(r, combo)
+            )
+            self.table.setCellWidget(row, 1, shift_combo)
+            
             # Jam fields (editable)
-            self.table.setItem(row, 1, QTableWidgetItem(item['Jam Masuk'] or ""))
-            self.table.setItem(row, 2, QTableWidgetItem(item['Jam Keluar'] or ""))
-            self.table.setItem(row, 3, QTableWidgetItem(item['Jam Masuk Lembur'] or ""))
-            self.table.setItem(row, 4, QTableWidgetItem(item['Jam Keluar Lembur'] or ""))
+            self.table.setItem(row, 2, QTableWidgetItem(item['Jam Masuk'] or ""))
+            self.table.setItem(row, 3, QTableWidgetItem(item['Jam Keluar'] or ""))
+            self.table.setItem(row, 4, QTableWidgetItem(item['Jam Masuk Lembur'] or ""))
+            self.table.setItem(row, 5, QTableWidgetItem(item['Jam Keluar Lembur'] or ""))
             
             # Jam Anomali (read-only, display as comma-separated)
             anomali_text = ", ".join(item['Jam Anomali']) if item['Jam Anomali'] else ""
             anomali_item = QTableWidgetItem(anomali_text)
             anomali_item.setFlags(anomali_item.flags() & ~Qt.ItemIsEditable)
-            self.table.setItem(row, 5, anomali_item)
+            self.table.setItem(row, 6, anomali_item)
             
             # Kelola Pelanggaran button dengan info total pelanggaran
             violations_widget = QWidget()
@@ -502,7 +568,7 @@ class AttendanceInputTab(QWidget):
             violations_layout.addWidget(count_label)
             
             violations_layout.addStretch()
-            self.table.setCellWidget(row, 6, violations_widget)
+            self.table.setCellWidget(row, 7, violations_widget)
     
     def on_item_changed(self, item):
         # Update current_data when table is edited
@@ -511,15 +577,34 @@ class AttendanceInputTab(QWidget):
         
         if row < len(self.current_data):
             field_map = {
-                1: 'Jam Masuk',
-                2: 'Jam Keluar', 
-                3: 'Jam Masuk Lembur',
-                4: 'Jam Keluar Lembur'
+                2: 'Jam Masuk',
+                3: 'Jam Keluar', 
+                4: 'Jam Masuk Lembur',
+                5: 'Jam Keluar Lembur'
             }
             
             if col in field_map:
                 value = item.text().strip() if item.text().strip() else None
                 self.current_data[row][field_map[col]] = value
+    
+    def on_shift_changed(self, row, combo):
+        """Handle shift change for a specific row"""
+        if row < len(self.current_data):
+            shift_id = combo.currentData()
+            shift_name = combo.currentText()
+            
+            # Update current_data
+            self.current_data[row]['shift_id'] = shift_id
+            self.current_data[row]['shift_name'] = shift_name
+            
+            # If this is existing data (has id), update database immediately
+            if 'id' in self.current_data[row] and self.current_data[row]['id']:
+                try:
+                    self.db_manager.update_attendance_shift(self.current_data[row]['id'], shift_id)
+                    print(f"✅ Shift updated for {self.current_data[row]['Nama']}: {shift_name}")
+                except Exception as e:
+                    print(f"❌ Failed to update shift: {e}")
+                    QMessageBox.warning(self, "Warning", f"Gagal update shift: {str(e)}")
     
     def save_to_database(self):
         try:
@@ -885,17 +970,17 @@ class ReportTab(QWidget):
         
         # Report table
         self.report_table = QTableWidget()
-        self.report_table.setColumnCount(11)
+        self.report_table.setColumnCount(13)  # Tambah kolom Loyalitas
         self.report_table.setHorizontalHeaderLabels([
             "Tanggal", "Jam Masuk", "Jam Keluar", "Jam Masuk Lembur", "Jam Keluar Lembur",
-            "Jam Kerja", "Jam Lembur", "Overtime", "Keterlambatan", "Status", "Keterangan"
+            "Jam Kerja", "Jam Lembur", "Loyalitas", "Overtime", "Keterlambatan", "Status", "Keterangan", "Pelanggaran"
         ])
         
         # Resize columns - ubah ke Interactive agar pengguna dapat mengubah ukuran kolom
         header = self.report_table.horizontalHeader()
         
         # Set semua kolom ke Interactive (bisa diubah ukurannya oleh user)
-        for i in range(11):  # Semua kolom termasuk keterangan
+        for i in range(13):  # Semua kolom termasuk Loyalitas, keterangan dan pelanggaran
             header.setSectionResizeMode(i, QHeaderView.Interactive)
         
         # Set default width untuk kolom
@@ -906,10 +991,12 @@ class ReportTab(QWidget):
         self.report_table.setColumnWidth(4, 120)  # Jam Keluar Lembur
         self.report_table.setColumnWidth(5, 100)  # Jam Kerja
         self.report_table.setColumnWidth(6, 100)  # Jam Lembur
-        self.report_table.setColumnWidth(7, 100)  # Overtime
-        self.report_table.setColumnWidth(8, 100)  # Keterlambatan
-        self.report_table.setColumnWidth(9, 80)   # Status
-        self.report_table.setColumnWidth(10, 300) # Keterangan
+        self.report_table.setColumnWidth(7, 100)  # Loyalitas
+        self.report_table.setColumnWidth(8, 100)  # Overtime
+        self.report_table.setColumnWidth(9, 100)  # Keterlambatan
+        self.report_table.setColumnWidth(10, 80)  # Status
+        self.report_table.setColumnWidth(11, 200) # Keterangan
+        self.report_table.setColumnWidth(12, 300) # Pelanggaran
         
         # Enable stretching table to fill available space
         self.report_table.horizontalHeader().setStretchLastSection(True)
@@ -1050,37 +1137,15 @@ PENGATURAN:
         self.calculate_and_populate_report(attendance_data)
     
     def calculate_and_populate_report(self, attendance_data):
-        # Get employee shift settings
+        # Sekarang menggunakan shift per hari, bukan shift per karyawan
         employee_id = self.employee_combo.currentData()
         employee_name = self.employee_combo.currentText()
-        
-        try:
-            # Get employee shift info
-            employees = self.db_manager.get_employees_with_shifts()
-            employee_info = None
-            for emp in employees:
-                if emp['id'] == employee_id:
-                    employee_info = emp
-                    break
-            
-            if not employee_info or not employee_info['shift_id']:
-                QMessageBox.warning(self, "Warning", f"Karyawan {employee_name} belum di-assign ke shift!")
-                return
-            
-        # Get shift settings
-            shift_settings = self.db_manager.get_shift_by_id(employee_info['shift_id'])
-            if not shift_settings:
-                QMessageBox.warning(self, "Warning", "Data shift tidak ditemukan!")
-                return
-                
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Gagal mengambil data shift: {str(e)}")
-            return
         
         self.report_table.setRowCount(len(attendance_data))
         
         total_jam_kerja = 0
         total_jam_lembur = 0
+        total_loyalitas = 0
         total_overtime = 0
         total_terlambat = 0
         
@@ -1092,6 +1157,17 @@ PENGATURAN:
             self.report_table.setItem(row, 3, QTableWidgetItem(data['jam_masuk_lembur'] or "-"))
             self.report_table.setItem(row, 4, QTableWidgetItem(data['jam_keluar_lembur'] or "-"))
             
+            # Get shift settings for this specific day (shift per hari)
+            shift_id = data.get('shift_id', 1)  # Default to shift 1 if not set
+            try:
+                shift_settings = self.db_manager.get_shift_by_id(shift_id)
+                if not shift_settings:
+                    # Fallback to default shift
+                    shift_settings = self.db_manager.get_shift_by_id(1)
+            except:
+                # Fallback to default shift
+                shift_settings = self.db_manager.get_shift_by_id(1)
+            
             # Calculate work hours, overtime, etc. with day detection
             from datetime import datetime
             date_obj = datetime.strptime(data['date'], '%Y-%m-%d')
@@ -1099,6 +1175,7 @@ PENGATURAN:
             
             jam_kerja = self.calculate_work_hours(data, shift_settings, day_of_week)
             jam_lembur = self.calculate_overtime_hours(data, shift_settings, day_of_week)
+            loyalitas = self.calculate_loyalitas(data, shift_settings, day_of_week)
             overtime = self.calculate_overtime(data, shift_settings, day_of_week)
             terlambat = self.calculate_lateness(data, shift_settings, day_of_week)
             
@@ -1107,26 +1184,32 @@ PENGATURAN:
                 jam_kerja_text = self.format_time_duration(jam_kerja)
                 self.report_table.setItem(row, 5, QTableWidgetItem(jam_kerja_text))
                 self.report_table.setItem(row, 6, QTableWidgetItem("-"))  # No lembur on Sunday
-                self.report_table.setItem(row, 7, QTableWidgetItem("-"))  # No overtime on Sunday
-                self.report_table.setItem(row, 8, QTableWidgetItem("-"))  # No lateness on Sunday
+                self.report_table.setItem(row, 7, QTableWidgetItem("-"))  # No loyalitas on Sunday
+                self.report_table.setItem(row, 8, QTableWidgetItem("-"))  # No overtime on Sunday
+                self.report_table.setItem(row, 9, QTableWidgetItem("-"))  # No lateness on Sunday
             else:
                 # Regular format for other days with new time format
                 jam_kerja_text = self.format_time_duration(jam_kerja)
                 jam_lembur_text = self.format_time_duration(jam_lembur)
+                loyalitas_text = self.format_time_duration(loyalitas / 60, "menit_only") if loyalitas > 0 else "-"  # loyalitas is in minutes
                 overtime_text = self.format_time_duration(overtime, "menit_only")
                 terlambat_text = self.format_time_duration(terlambat / 60, "menit_only")  # terlambat is in minutes
                 
                 self.report_table.setItem(row, 5, QTableWidgetItem(jam_kerja_text))
                 self.report_table.setItem(row, 6, QTableWidgetItem(jam_lembur_text))
-                self.report_table.setItem(row, 7, QTableWidgetItem(overtime_text))
-                self.report_table.setItem(row, 8, QTableWidgetItem(terlambat_text))
+                self.report_table.setItem(row, 7, QTableWidgetItem(loyalitas_text))
+                self.report_table.setItem(row, 8, QTableWidgetItem(overtime_text))
+                self.report_table.setItem(row, 9, QTableWidgetItem(terlambat_text))
             
             # Status
             status = "Hadir" if data['jam_masuk'] else "Tidak Hadir"
-            self.report_table.setItem(row, 9, QTableWidgetItem(status))
+            self.report_table.setItem(row, 10, QTableWidgetItem(status))
             
-            # Keterangan dengan detail pelanggaran
+            # Keterangan (catatan umum)
             keterangan = "-"  # Default kosong
+            
+            # Kolom Pelanggaran (khusus pelanggaran)
+            pelanggaran = "-"  # Default kosong
             
             # Get violations for this attendance record
             if 'id' in data and data['id']:
@@ -1141,32 +1224,44 @@ PENGATURAN:
                         description = violation['description']
                         violation_details.append(f"{start_time}-{end_time} {description}")
                     
-                    keterangan = "\n".join(violation_details)  # Use newline instead of " | "
+                    # Untuk kolom keterangan tetap kosong atau bisa diisi catatan lain
+                    # Untuk kolom pelanggaran diisi dengan detail pelanggaran
+                    pelanggaran = "\n".join(violation_details)  # Use newline instead of " | "
             
             # Set keterangan dengan word wrap untuk text panjang
             keterangan_item = QTableWidgetItem(keterangan)
             keterangan_item.setToolTip(keterangan)  # Tooltip untuk text panjang
-            self.report_table.setItem(row, 10, keterangan_item)
+            self.report_table.setItem(row, 11, keterangan_item)
             
-            # Add to totals (exclude Sunday from lembur, overtime, lateness)
+            # Set pelanggaran dengan word wrap untuk text panjang
+            pelanggaran_item = QTableWidgetItem(pelanggaran)
+            pelanggaran_item.setToolTip(pelanggaran)  # Tooltip untuk text panjang
+            if pelanggaran != "-":
+                pelanggaran_item.setForeground(QColor(255, 0, 0))  # Warna merah untuk pelanggaran
+            self.report_table.setItem(row, 12, pelanggaran_item)
+            
+            # Add to totals (exclude Sunday from lembur, loyalitas, overtime, lateness)
             total_jam_kerja += jam_kerja
             if day_of_week != 6:  # Not Sunday
                 total_jam_lembur += jam_lembur
+                total_loyalitas += loyalitas
                 total_overtime += overtime
                 total_terlambat += terlambat
         
-        # Update summary with new format
+        # Update summary with new format including loyalitas
         employee_name = self.employee_combo.currentText()
         
         # Format totals using the new time format
         total_kerja_text = self.format_time_duration(total_jam_kerja)
         total_lembur_text = self.format_time_duration(total_jam_lembur)
+        total_loyalitas_text = self.format_time_duration(total_loyalitas / 60, "menit_only") if total_loyalitas > 0 else "0 menit"  # loyalitas is in minutes
         total_overtime_text = self.format_time_duration(total_overtime, "menit_only")
         total_terlambat_text = self.format_time_duration(total_terlambat / 60, "menit_only")  # terlambat is in minutes
         
         summary_text = (f"Laporan: {employee_name} | "
                        f"Total Kerja: {total_kerja_text} | "
                        f"Total Lembur: {total_lembur_text} | "
+                       f"Total Loyalitas: {total_loyalitas_text} | "
                        f"Total Overtime: {total_overtime_text} | "
                        f"Total Terlambat: {total_terlambat_text}")
         
@@ -1273,6 +1368,40 @@ PENGATURAN:
         
         return 0.0
     
+    def calculate_loyalitas(self, data, shift_settings, day_of_week):
+        """Calculate loyalitas: 30 menit - 1 jam lebih dari jam kerja normal"""
+        # Sunday has no loyalitas calculation
+        if day_of_week == 6:
+            return 0.0
+            
+        if not data['jam_keluar']:
+            return 0.0
+        
+        try:
+            keluar = datetime.strptime(data['jam_keluar'], "%H:%M")
+            
+            # Get scheduled work end time based on day
+            if day_of_week == 5:  # Saturday
+                jadwal_selesai = datetime.strptime(shift_settings['saturday_work_end'], "%H:%M")
+            else:  # Monday-Friday
+                jadwal_selesai = datetime.strptime(shift_settings['weekday_work_end'], "%H:%M")
+            
+            # Calculate extra time worked
+            if keluar > jadwal_selesai:
+                extra_minutes = (keluar - jadwal_selesai).total_seconds() / 60
+                
+                # Loyalitas: 30 menit sampai 1 jam (60 menit)
+                if 30 <= extra_minutes <= 60:
+                    return extra_minutes
+                # Jika lebih dari 1 jam, tidak ada loyalitas (sudah masuk overtime)
+                elif extra_minutes > 60:
+                    return 0.0
+                    
+        except:
+            pass
+        
+        return 0.0
+    
     def calculate_lateness(self, data, shift_settings, day_of_week):
         """Calculate lateness based on shift settings and day"""
         if not data['jam_masuk']:
@@ -1301,16 +1430,95 @@ PENGATURAN:
         
         return 0.0
     
+    def calculate_loyalitas(self, data, shift_settings, day_of_week):
+        """Calculate loyalitas (30 menit - 1 jam lebih dari jam kerja normal)"""
+        if not data['jam_keluar'] or day_of_week == 6:  # No loyalitas on Sunday
+            return 0.0
+        
+        try:
+            keluar = datetime.strptime(data['jam_keluar'], "%H:%M")
+            
+            # Get scheduled end time based on day
+            if day_of_week == 5:  # Saturday
+                jadwal_keluar = datetime.strptime(shift_settings['saturday_work_end'], "%H:%M")
+            else:  # Monday-Friday
+                jadwal_keluar = datetime.strptime(shift_settings['weekday_work_end'], "%H:%M")
+            
+            if keluar > jadwal_keluar:
+                # Calculate extra time in minutes
+                extra_minutes = (keluar - jadwal_keluar).total_seconds() / 60
+                
+                # Loyalitas: 30 menit - 1 jam (60 menit)
+                if 30 <= extra_minutes <= 60:
+                    return extra_minutes
+                # Jika lebih dari 1 jam, tidak ada loyalitas (sudah masuk overtime)
+                elif extra_minutes > 60:
+                    return 0.0
+        except:
+            pass
+        
+        return 0.0
+    
+    def generate_complete_date_range(self, start_date, end_date, attendance_data):
+        """Generate complete date range with empty entries for missing dates"""
+        from datetime import datetime, timedelta
+        
+        # Convert string dates to datetime objects
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        
+        # Create dictionary of existing attendance data
+        attendance_dict = {}
+        for data in attendance_data:
+            attendance_dict[data['date']] = data
+        
+        # Generate complete date range
+        complete_data = []
+        current_date = start_dt
+        
+        while current_date <= end_dt:
+            date_str = current_date.strftime("%Y-%m-%d")
+            day_of_week = current_date.weekday()  # 0=Monday, 6=Sunday
+            
+            if date_str in attendance_dict:
+                # Use existing data
+                complete_data.append(attendance_dict[date_str])
+            else:
+                # Create empty entry for missing date
+                empty_entry = {
+                    'id': None,
+                    'date': date_str,
+                    'jam_masuk': None,
+                    'jam_keluar': None,
+                    'jam_masuk_lembur': None,
+                    'jam_keluar_lembur': None,
+                    'shift_id': 1,  # Default shift
+                    'day_name': current_date.strftime("%A"),  # Day name for reference
+                    'is_sunday': day_of_week == 6  # Mark Sunday
+                }
+                complete_data.append(empty_entry)
+            
+            current_date += timedelta(days=1)
+        
+        return complete_data
+    
     def export_to_excel(self):
-        """Export laporan ke file Excel"""
+        """Export laporan ke file Excel dengan tanggal lengkap termasuk hari kosong"""
         if self.report_table.rowCount() == 0:
             QMessageBox.warning(self, "Warning", "Tidak ada data untuk diekspor. Generate laporan terlebih dahulu.")
             return
         
         # Get file path from user
         employee_name = self.employee_combo.currentText()
+        employee_id = self.employee_combo.currentData()
         start_date = self.start_date.date().toString("yyyy-MM-dd")
         end_date = self.end_date.date().toString("yyyy-MM-dd")
+        
+        # Get attendance data with complete date range
+        attendance_data = self.db_manager.get_attendance_by_employee_period(
+            employee_id, start_date, end_date
+        )
+        complete_data = self.generate_complete_date_range(start_date, end_date, attendance_data)
         
         default_filename = f"Laporan_Absensi_{employee_name}_{start_date}_to_{end_date}.xlsx"
         
@@ -1339,23 +1547,23 @@ PENGATURAN:
             )
             
             # Add title
-            ws.merge_cells("A1:K1")
+            ws.merge_cells("A1:M1")  # Tambahkan kolom M untuk loyalitas dan pelanggaran
             title_cell = ws["A1"]
             title_cell.value = f"LAPORAN ABSENSI - {employee_name.upper()}"
             title_cell.font = Font(bold=True, size=14)
             title_cell.alignment = Alignment(horizontal="center")
             
             # Add period info
-            ws.merge_cells("A2:K2")
+            ws.merge_cells("A2:M2")  # Tambahkan kolom M untuk loyalitas dan pelanggaran
             period_cell = ws["A2"]
-            period_cell.value = f"Periode: {start_date} s/d {end_date}"
+            period_cell.value = f"Periode: {start_date} s/d {end_date} (Termasuk hari kosong)"
             period_cell.font = Font(bold=True)
             period_cell.alignment = Alignment(horizontal="center")
             
             # Add headers
             headers = [
                 "Tanggal", "Jam Masuk", "Jam Keluar", "Jam Masuk Lembur", "Jam Keluar Lembur",
-                "Jam Kerja", "Jam Lembur", "Overtime", "Keterlambatan", "Status", "Keterangan"
+                "Jam Kerja", "Jam Lembur", "Loyalitas", "Overtime", "Keterlambatan", "Status", "Keterangan", "Pelanggaran"
             ]
             
             for col, header in enumerate(headers, 1):
@@ -1366,34 +1574,99 @@ PENGATURAN:
                 cell.alignment = header_alignment
                 cell.border = border
             
-            # Add data
-            for row in range(self.report_table.rowCount()):
-                for col in range(self.report_table.columnCount()):
-                    item = self.report_table.item(row, col)
-                    cell_value = item.text() if item else ""
+            # Add data using complete_data (includes empty dates)
+            for row, data in enumerate(complete_data):
+                # Get shift settings for this day
+                shift_id = data.get('shift_id', 1)
+                try:
+                    shift_settings = self.db_manager.get_shift_by_id(shift_id)
+                    if not shift_settings:
+                        shift_settings = self.db_manager.get_shift_by_id(1)
+                except:
+                    shift_settings = self.db_manager.get_shift_by_id(1)
+                
+                # Calculate values for this day
+                from datetime import datetime
+                date_obj = datetime.strptime(data['date'], '%Y-%m-%d')
+                day_of_week = date_obj.weekday()  # 0=Monday, 6=Sunday
+                
+                # Basic data
+                excel_row = row + 5
+                ws.cell(row=excel_row, column=1).value = data['date']
+                ws.cell(row=excel_row, column=2).value = data['jam_masuk'] or "-"
+                ws.cell(row=excel_row, column=3).value = data['jam_keluar'] or "-"
+                ws.cell(row=excel_row, column=4).value = data['jam_masuk_lembur'] or "-"
+                ws.cell(row=excel_row, column=5).value = data['jam_keluar_lembur'] or "-"
+                
+                # Calculate derived values only if there's attendance data
+                if data['jam_masuk'] or data['jam_keluar']:
+                    jam_kerja = self.calculate_work_hours(data, shift_settings, day_of_week)
+                    jam_lembur = self.calculate_overtime_hours(data, shift_settings, day_of_week)
+                    loyalitas = self.calculate_loyalitas(data, shift_settings, day_of_week)
+                    overtime = self.calculate_overtime(data, shift_settings, day_of_week)
+                    terlambat = self.calculate_lateness(data, shift_settings, day_of_week)
                     
-                    excel_cell = ws.cell(row=row+5, column=col+1)
-                    excel_cell.value = cell_value
-                    excel_cell.border = border
+                    ws.cell(row=excel_row, column=6).value = self.format_time_duration(jam_kerja)
+                    ws.cell(row=excel_row, column=7).value = self.format_time_duration(jam_lembur) if jam_lembur > 0 else "-"
+                    ws.cell(row=excel_row, column=8).value = self.format_time_duration(loyalitas / 60, "menit_only") if loyalitas > 0 else "-"
+                    ws.cell(row=excel_row, column=9).value = self.format_time_duration(overtime, "menit_only") if overtime > 0 else "-"
+                    ws.cell(row=excel_row, column=10).value = self.format_time_duration(terlambat / 60, "menit_only") if terlambat > 0 else "-"
+                    ws.cell(row=excel_row, column=11).value = "Hadir"
+                else:
+                    # Empty day
+                    ws.cell(row=excel_row, column=6).value = "-"
+                    ws.cell(row=excel_row, column=7).value = "-"
+                    ws.cell(row=excel_row, column=8).value = "-"
+                    ws.cell(row=excel_row, column=9).value = "-"
+                    ws.cell(row=excel_row, column=10).value = "-"
+                    
+                    # Mark Sunday or empty day
+                    if day_of_week == 6:  # Sunday
+                        ws.cell(row=excel_row, column=11).value = "Minggu"
+                        # Color Sunday rows differently
+                        for col in range(1, 14):
+                            ws.cell(row=excel_row, column=col).fill = PatternFill(start_color="F0F0F0", end_color="F0F0F0", fill_type="solid")
+                    else:
+                        ws.cell(row=excel_row, column=11).value = "Tidak Hadir"
+                
+                # Keterangan and Pelanggaran
+                ws.cell(row=excel_row, column=12).value = "-"  # Keterangan
+                
+                # Get violations if data exists
+                pelanggaran = "-"
+                if data.get('id'):
+                    violations = self.db_manager.get_violations_by_attendance(data['id'])
+                    if violations:
+                        violation_details = []
+                        for violation in violations:
+                            violation_details.append(f"{violation['start_time']}-{violation['end_time']} {violation['description']}")
+                        pelanggaran = "\n".join(violation_details)
+                
+                pelanggaran_cell = ws.cell(row=excel_row, column=13)
+                pelanggaran_cell.value = pelanggaran
+                if pelanggaran != "-":
+                    pelanggaran_cell.font = Font(color="FF0000")  # Red color for violations
+                
+                # Apply borders to all cells
+                for col in range(1, 14):
+                    ws.cell(row=excel_row, column=col).border = border
                     
                     # Center align for certain columns
-                    if col in [0, 1, 2, 3, 4, 9]:  # Date and time columns, status
-                        excel_cell.alignment = Alignment(horizontal="center")
-                    elif col == 10:  # Kolom Keterangan
-                        # Enable text wrapping untuk kolom keterangan dan set row height
-                        excel_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-                        # Set minimum row height untuk menampung multiple lines
-                        if '\n' in cell_value:
-                            line_count = cell_value.count('\n') + 1
-                            ws.row_dimensions[row+5].height = max(15 * line_count, 30)
+                    if col in [1, 2, 3, 4, 5, 11]:  # Date, time columns, status
+                        ws.cell(row=excel_row, column=col).alignment = Alignment(horizontal="center")
+                    elif col == 13:  # Pelanggaran column
+                        ws.cell(row=excel_row, column=col).alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+                        if '\n' in pelanggaran:
+                            line_count = pelanggaran.count('\n') + 1
+                            ws.row_dimensions[excel_row].height = max(15 * line_count, 30)
                     else:
-                        excel_cell.alignment = Alignment(horizontal="left", vertical="center")
+                        ws.cell(row=excel_row, column=col).alignment = Alignment(horizontal="left", vertical="center")
             
             # Add summary
-            summary_row = self.report_table.rowCount() + 6
-            ws.merge_cells(f"A{summary_row}:K{summary_row}")
+            summary_row = len(complete_data) + 6
+            ws.merge_cells(f"A{summary_row}:M{summary_row}")  # Tambahkan kolom M untuk loyalitas
             summary_cell = ws[f"A{summary_row}"]
-            summary_cell.value = self.summary_label.text()
+            summary_cell.value = f"Laporan lengkap periode {start_date} s/d {end_date} - Total {len(complete_data)} hari (termasuk hari kosong)"
             summary_cell.font = Font(bold=True)
             summary_cell.alignment = Alignment(horizontal="center")
             
@@ -1402,7 +1675,7 @@ PENGATURAN:
             
             # Auto-adjust column widths
             from openpyxl.utils import get_column_letter
-            for col_num in range(1, 12):  # Columns A to K (1 to 11)
+            for col_num in range(1, 14):  # Columns A to M (1 to 13)
                 column_letter = get_column_letter(col_num)
                 max_length = 0
                 
@@ -1418,9 +1691,9 @@ PENGATURAN:
                     except:
                         pass
                 
-                # Set column width (minimum 10, maximum 25, except for Keterangan column)
-                if col_num == 11:  # Kolom Keterangan (index 11 dalam Excel)
-                    # Kolom keterangan dibuat lebih lebar untuk menampung detail pelanggaran
+                # Set column width (minimum 10, maximum 25, except for Pelanggaran column)
+                if col_num == 13:  # Kolom Pelanggaran (index 13 dalam Excel)
+                    # Kolom pelanggaran dibuat lebih lebar untuk menampung detail pelanggaran
                     adjusted_width = min(max(max_length + 2, 40), 60)
                 else:
                     adjusted_width = min(max(max_length + 2, 10), 25)
@@ -1458,7 +1731,7 @@ PENGATURAN:
                 return
             
             # Title
-            ws.merge_cells(f"A{start_row}:K{start_row}")
+            ws.merge_cells(f"A{start_row}:M{start_row}")  # Tambahkan kolom M untuk loyalitas
             title_cell = ws[f"A{start_row}"]
             title_cell.value = "PERATURAN SHIFT"
             title_cell.font = Font(bold=True, size=12)
@@ -1467,7 +1740,7 @@ PENGATURAN:
             current_row = start_row + 2
             
             # Shift name
-            ws.merge_cells(f"A{current_row}:K{current_row}")
+            ws.merge_cells(f"A{current_row}:M{current_row}")  # Tambahkan kolom M untuk loyalitas
             shift_name_cell = ws[f"A{current_row}"]
             shift_name_cell.value = f"SHIFT: {shift_settings['name']}"
             shift_name_cell.font = Font(bold=True)
@@ -1476,7 +1749,7 @@ PENGATURAN:
             current_row += 2
             
             # Weekday rules
-            ws.merge_cells(f"A{current_row}:K{current_row}")
+            ws.merge_cells(f"A{current_row}:L{current_row}")  # Tambahkan kolom L untuk pelanggaran
             weekday_title = ws[f"A{current_row}"]
             weekday_title.value = "SENIN - JUMAT:"
             weekday_title.font = Font(bold=True)
@@ -1492,7 +1765,7 @@ PENGATURAN:
             ]
             
             for rule in weekday_rules:
-                ws.merge_cells(f"A{current_row}:K{current_row}")
+                ws.merge_cells(f"A{current_row}:M{current_row}")  # Tambahkan kolom M untuk loyalitas
                 rule_cell = ws[f"A{current_row}"]
                 rule_cell.value = rule
                 current_row += 1
@@ -1500,7 +1773,7 @@ PENGATURAN:
             current_row += 1
             
             # Saturday rules
-            ws.merge_cells(f"A{current_row}:K{current_row}")
+            ws.merge_cells(f"A{current_row}:L{current_row}")  # Tambahkan kolom L untuk pelanggaran
             saturday_title = ws[f"A{current_row}"]
             saturday_title.value = "SABTU:"
             saturday_title.font = Font(bold=True)
@@ -1516,7 +1789,7 @@ PENGATURAN:
             ]
             
             for rule in saturday_rules:
-                ws.merge_cells(f"A{current_row}:K{current_row}")
+                ws.merge_cells(f"A{current_row}:M{current_row}")  # Tambahkan kolom M untuk loyalitas
                 rule_cell = ws[f"A{current_row}"]
                 rule_cell.value = rule
                 current_row += 1
@@ -1524,21 +1797,21 @@ PENGATURAN:
             current_row += 1
             
             # Sunday and general rules
-            ws.merge_cells(f"A{current_row}:K{current_row}")
+            ws.merge_cells(f"A{current_row}:L{current_row}")  # Tambahkan kolom L untuk pelanggaran
             sunday_title = ws[f"A{current_row}"]
             sunday_title.value = "MINGGU:"
             sunday_title.font = Font(bold=True)
             
             current_row += 1
             
-            ws.merge_cells(f"A{current_row}:K{current_row}")
+            ws.merge_cells(f"A{current_row}:L{current_row}")  # Tambahkan kolom L untuk pelanggaran
             sunday_rule = ws[f"A{current_row}"]
             sunday_rule.value = "• Hitung durasi kerja saja (tidak ada lembur/overtime)"
             
             current_row += 2
             
             # General settings
-            ws.merge_cells(f"A{current_row}:K{current_row}")
+            ws.merge_cells(f"A{current_row}:L{current_row}")  # Tambahkan kolom L untuk pelanggaran
             general_title = ws[f"A{current_row}"]
             general_title.value = "PENGATURAN UMUM:"
             general_title.font = Font(bold=True)
@@ -1551,7 +1824,7 @@ PENGATURAN:
             ]
             
             for rule in general_rules:
-                ws.merge_cells(f"A{current_row}:K{current_row}")
+                ws.merge_cells(f"A{current_row}:M{current_row}")  # Tambahkan kolom M untuk loyalitas
                 rule_cell = ws[f"A{current_row}"]
                 rule_cell.value = rule
                 current_row += 1

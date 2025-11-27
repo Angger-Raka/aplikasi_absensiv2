@@ -48,7 +48,7 @@ class DatabaseManager:
             )
         ''')
         
-            # Tabel absensi harian
+            # Tabel absensi harian dengan shift per hari
             cursor.execute('''
             CREATE TABLE IF NOT EXISTS attendance (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,11 +59,21 @@ class DatabaseManager:
                 jam_masuk_lembur TEXT,
                 jam_keluar_lembur TEXT,
                 jam_anomali TEXT,
+                shift_id INTEGER DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (employee_id) REFERENCES employees (id),
+                FOREIGN KEY (shift_id) REFERENCES shifts (id),
                 UNIQUE(employee_id, date)
             )
         ''')
+        
+            # Tambah kolom shift_id jika belum ada (untuk database existing)
+            try:
+                cursor.execute('ALTER TABLE attendance ADD COLUMN shift_id INTEGER DEFAULT 1')
+                print("✅ Kolom shift_id berhasil ditambahkan ke tabel attendance")
+            except sqlite3.OperationalError:
+                # Kolom sudah ada
+                pass
         
             # Tabel shifts dengan pengaturan per hari
             cursor.execute('''
@@ -234,29 +244,37 @@ class DatabaseManager:
                 # Convert jam_anomali list to JSON string
                 jam_anomali_json = json.dumps(data['Jam Anomali']) if data['Jam Anomali'] else None
                 
+                # Get shift_id from data, default to employee's default shift if not provided
+                shift_id = data.get('shift_id')
+                if not shift_id:
+                    # Get employee's default shift
+                    cursor.execute('SELECT shift_id FROM employees WHERE id = ?', (employee_id,))
+                    emp_result = cursor.fetchone()
+                    shift_id = emp_result[0] if emp_result else 1
+                
                 if mode == 'insert_only':
                     # Only insert if not exists
                     cursor.execute('''
                         INSERT OR IGNORE INTO attendance 
-                        (employee_id, date, jam_masuk, jam_keluar, jam_masuk_lembur, jam_keluar_lembur, jam_anomali)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        (employee_id, date, jam_masuk, jam_keluar, jam_masuk_lembur, jam_keluar_lembur, jam_anomali, shift_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         employee_id, date, 
                         data['Jam Masuk'], data['Jam Keluar'],
                         data['Jam Masuk Lembur'], data['Jam Keluar Lembur'],
-                        jam_anomali_json
+                        jam_anomali_json, shift_id
                     ))
                 else:
                     # Insert or replace (for both 'replace' and 'merge' modes)
                     cursor.execute('''
                         INSERT OR REPLACE INTO attendance 
-                        (employee_id, date, jam_masuk, jam_keluar, jam_masuk_lembur, jam_keluar_lembur, jam_anomali)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        (employee_id, date, jam_masuk, jam_keluar, jam_masuk_lembur, jam_keluar_lembur, jam_anomali, shift_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         employee_id, date, 
                         data['Jam Masuk'], data['Jam Keluar'],
                         data['Jam Masuk Lembur'], data['Jam Keluar Lembur'],
-                        jam_anomali_json
+                        jam_anomali_json, shift_id
                     ))
             
             conn.commit()
@@ -309,9 +327,11 @@ class DatabaseManager:
             
             cursor.execute('''
                 SELECT a.id, e.name, a.jam_masuk, a.jam_keluar, 
-                       a.jam_masuk_lembur, a.jam_keluar_lembur, a.jam_anomali
+                       a.jam_masuk_lembur, a.jam_keluar_lembur, a.jam_anomali,
+                       a.shift_id, s.name as shift_name
                 FROM attendance a
                 JOIN employees e ON a.employee_id = e.id
+                LEFT JOIN shifts s ON a.shift_id = s.id
                 WHERE a.date = ?
                 ORDER BY e.name
             ''', (date,))
@@ -328,7 +348,9 @@ class DatabaseManager:
                     'Jam Keluar': row[3],
                     'Jam Masuk Lembur': row[4],
                     'Jam Keluar Lembur': row[5],
-                    'Jam Anomali': jam_anomali
+                    'Jam Anomali': jam_anomali,
+                    'shift_id': row[7],
+                    'shift_name': row[8] or 'Default Shift'
                 })
             
             return attendance_data
@@ -355,6 +377,10 @@ class DatabaseManager:
         finally:
             if conn:
                 conn.close()
+    
+    def update_attendance_shift(self, attendance_id, shift_id):
+        """Update shift untuk record absensi tertentu"""
+        return self.update_attendance_field(attendance_id, 'shift_id', shift_id)
     
     def add_violation(self, attendance_id, start_time, end_time, description):
         """Menambah pelanggaran untuk attendance tertentu"""
@@ -515,6 +541,36 @@ class DatabaseManager:
             if conn:
                 conn.close()
     
+    def get_employee_by_name(self, name):
+        """Mengambil data karyawan berdasarkan nama"""
+        conn = None
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT e.id, e.name, e.shift_id, s.name as shift_name
+                FROM employees e
+                LEFT JOIN shifts s ON e.shift_id = s.id
+                WHERE e.name = ?
+            ''', (name,))
+            
+            result = cursor.fetchone()
+            if result:
+                return {
+                    'id': result[0],
+                    'name': result[1],
+                    'shift_id': result[2],
+                    'shift_name': result[3]
+                }
+            return None
+            
+        except Exception as e:
+            raise e
+        finally:
+            if conn:
+                conn.close()
+    
     def get_attendance_by_employee_period(self, employee_id, start_date, end_date):
         """Mengambil data absensi karyawan dalam periode tertentu"""
         conn = None
@@ -649,6 +705,26 @@ class DatabaseManager:
                 shift_data['late_tolerance'], shift_data['overtime_mode'],
                 shift_id
             ))
+            
+            conn.commit()
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            raise e
+        finally:
+            if conn:
+                conn.close()
+    
+    def update_attendance_shift(self, attendance_id, shift_id):
+        """Update shift untuk record attendance tertentu"""
+        conn = None
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                UPDATE attendance SET shift_id = ? WHERE id = ?
+            ''', (shift_id, attendance_id))
             
             conn.commit()
         except Exception as e:
