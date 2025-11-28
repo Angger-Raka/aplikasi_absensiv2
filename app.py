@@ -382,10 +382,10 @@ class AttendanceInputTab(QWidget):
         
         # Table
         self.table = QTableWidget()
-        self.table.setColumnCount(8)
+        self.table.setColumnCount(9)
         self.table.setHorizontalHeaderLabels([
             "Nama Karyawan", "Shift", "Jam Masuk Kerja", "Jam Keluar Kerja", 
-            "Jam Masuk Lembur", "Jam Keluar Lembur", "Jam Anomali", "Kelola Pelanggaran"
+            "Jam Masuk Lembur", "Jam Keluar Lembur", "Jam Anomali", "Keterangan", "Kelola Pelanggaran"
         ])
         
         # Make table editable
@@ -395,18 +395,19 @@ class AttendanceInputTab(QWidget):
         header = self.table.horizontalHeader()
         
         # Set semua kolom ke Interactive (bisa diubah ukurannya oleh user)
-        for i in range(8):  # Semua kolom termasuk Shift dan Kelola Pelanggaran
+        for i in range(9):  # Semua kolom termasuk Shift, Keterangan dan Kelola Pelanggaran
             header.setSectionResizeMode(i, QHeaderView.Interactive)
         
         # Set default width untuk kolom
-        self.table.setColumnWidth(0, 180)  # Nama Karyawan
-        self.table.setColumnWidth(1, 120)  # Shift
+        self.table.setColumnWidth(0, 160)  # Nama Karyawan
+        self.table.setColumnWidth(1, 100)  # Shift
         self.table.setColumnWidth(2, 100)  # Jam Masuk Kerja
         self.table.setColumnWidth(3, 100)  # Jam Keluar Kerja
         self.table.setColumnWidth(4, 120)  # Jam Masuk Lembur
         self.table.setColumnWidth(5, 120)  # Jam Keluar Lembur
-        self.table.setColumnWidth(6, 150)  # Jam Anomali
-        self.table.setColumnWidth(7, 120)  # Kelola Pelanggaran
+        self.table.setColumnWidth(6, 120)  # Jam Anomali
+        self.table.setColumnWidth(7, 200)  # Keterangan
+        self.table.setColumnWidth(8, 120)  # Kelola Pelanggaran
         
         # Enable stretching table to fill available space
         self.table.horizontalHeader().setStretchLastSection(True)
@@ -539,6 +540,11 @@ class AttendanceInputTab(QWidget):
             anomali_item.setFlags(anomali_item.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(row, 6, anomali_item)
             
+            # Keterangan (editable)
+            keterangan_text = item.get('keterangan', '') or ""
+            keterangan_item = QTableWidgetItem(keterangan_text)
+            self.table.setItem(row, 7, keterangan_item)
+            
             # Kelola Pelanggaran button dengan info total pelanggaran
             violations_widget = QWidget()
             violations_layout = QHBoxLayout(violations_widget)
@@ -568,7 +574,7 @@ class AttendanceInputTab(QWidget):
             violations_layout.addWidget(count_label)
             
             violations_layout.addStretch()
-            self.table.setCellWidget(row, 7, violations_widget)
+            self.table.setCellWidget(row, 8, violations_widget)
     
     def on_item_changed(self, item):
         # Update current_data when table is edited
@@ -580,12 +586,25 @@ class AttendanceInputTab(QWidget):
                 2: 'Jam Masuk',
                 3: 'Jam Keluar', 
                 4: 'Jam Masuk Lembur',
-                5: 'Jam Keluar Lembur'
+                5: 'Jam Keluar Lembur',
+                7: 'keterangan'  # Kolom keterangan
             }
             
             if col in field_map:
                 value = item.text().strip() if item.text().strip() else None
                 self.current_data[row][field_map[col]] = value
+                
+                # Jika keterangan diubah dan data sudah ada di database, update langsung
+                if col == 7 and 'id' in self.current_data[row] and self.current_data[row]['id']:
+                    try:
+                        self.db_manager.update_attendance_keterangan(
+                            self.current_data[row]['id'], 
+                            value or ''
+                        )
+                        print(f"✅ Keterangan updated for {self.current_data[row]['Nama']}")
+                    except Exception as e:
+                        print(f"❌ Failed to update keterangan: {e}")
+                        QMessageBox.warning(self, "Warning", f"Gagal update keterangan: {str(e)}")
     
     def on_shift_changed(self, row, combo):
         """Handle shift change for a specific row"""
@@ -1596,11 +1615,10 @@ PENGATURAN:
                     ws.cell(row=excel_row, column=10).value = self.format_time_duration(terlambat / 60, "menit_only") if terlambat > 0 else "-"
                     ws.cell(row=excel_row, column=11).value = "Hadir"
                     
-                    # Highlight orange untuk keterlambatan
+                    # Highlight orange hanya pada cell keterlambatan (kolom 10)
                     if terlambat > 0:
                         orange_fill = PatternFill(start_color="FFA500", end_color="FFA500", fill_type="solid")
-                        for col in range(1, 14):
-                            ws.cell(row=excel_row, column=col).fill = orange_fill
+                        ws.cell(row=excel_row, column=10).fill = orange_fill  # Hanya kolom keterlambatan
                 else:
                     # Empty day
                     ws.cell(row=excel_row, column=6).value = "-"
@@ -1620,7 +1638,8 @@ PENGATURAN:
                         ws.cell(row=excel_row, column=11).value = "Tidak Hadir"
                 
                 # Keterangan and Pelanggaran
-                ws.cell(row=excel_row, column=12).value = "-"  # Keterangan
+                keterangan_value = data.get('keterangan', '') or "-"
+                ws.cell(row=excel_row, column=12).value = keterangan_value
                 
                 # Get violations if data exists
                 pelanggaran = "-"
