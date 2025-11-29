@@ -441,23 +441,49 @@ class AttendanceInputTab(QWidget):
             QApplication.setOverrideCursor(Qt.WaitCursor)
             
             try:
+                # Clear any previous state/cache
+                import gc
+                gc.collect()  # Force garbage collection
+                
+                # Create fresh processor instance
                 processor = ExcelProcessor()
+                
+                # Process with explicit error handling and debugging
+                print(f"🔄 Processing file: {file_path}")
                 data = processor.process_excel_log(file_path)
+                print(f"📊 Processed data count: {len(data) if data else 0}")
                 
                 if data:
+                    # Clear current data first
+                    self.current_data = []
+                    self.table.setRowCount(0)
+                    
+                    # Set new data
                     self.current_data = data
                     self.populate_table(data)
                     self.save_btn.setEnabled(True)
                     self.save_btn.setText("Save Data")  # Ubah teks tombol menjadi Save Data
                     self.add_violation_btn.setEnabled(True)
+                    
+                    print(f"✅ Import successful: {len(data)} employees")
                     QMessageBox.information(self, "Sukses", f"Berhasil import {len(data)} data karyawan")
                 else:
-                    QMessageBox.warning(self, "Warning", "Tidak ada data yang berhasil diproses dari file Excel")
+                    print("❌ No data processed from Excel file")
+                    QMessageBox.warning(self, "Warning", 
+                                      "Tidak ada data yang berhasil diproses dari file Excel.\n\n"
+                                      "Kemungkinan penyebab:\n"
+                                      "• Format file tidak sesuai dengan yang diharapkan\n"
+                                      "• File kosong atau corrupt\n"
+                                      "• Struktur data berbeda dari format standar\n\n"
+                                      "Pastikan file Excel berisi data absensi dengan format yang benar.")
                     
             except FileNotFoundError as e:
+                print(f"❌ File not found: {e}")
                 QMessageBox.critical(self, "File Tidak Ditemukan", str(e))
             except Exception as e:
                 error_msg = str(e)
+                print(f"❌ Import error: {error_msg}")
+                
                 if "OLE2 inconsistency" in error_msg or "file size" in error_msg:
                     QMessageBox.critical(
                         self, "Error Format Excel", 
@@ -484,6 +510,13 @@ class AttendanceInputTab(QWidget):
             finally:
                 # Restore normal cursor
                 QApplication.restoreOverrideCursor()
+                
+                # Additional cleanup
+                try:
+                    import gc
+                    gc.collect()  # Clean up any remaining objects
+                except:
+                    pass
     
     def populate_table(self, data):
         self.table.setRowCount(len(data))

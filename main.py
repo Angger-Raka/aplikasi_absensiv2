@@ -133,40 +133,161 @@ class ExcelProcessor:
             raise FileNotFoundError(f"File tidak ditemukan: '{file_path}'")
         
         final_results = []
+        file_read_success = False
+        temp_file_path = None
+        
+        # Clear any pandas cache/state and reset pandas
+        try:
+            import gc
+            
+            # Clear pandas cache
+            if hasattr(pd, '_cache'):
+                pd._cache.clear()
+            
+            # Force garbage collection
+            gc.collect()
+            
+            # Reset pandas options to default (in case something changed)
+            pd.reset_option('all')
+            
+        except Exception as e:
+            print(f"   ⚠️  Cache cleanup warning: {e}")
+            pass
+        
+        print(f"📂 Processing file: {os.path.basename(file_path)}")
+        
+        # Create a temporary copy to avoid file handle conflicts
+        try:
+            import shutil
+            import tempfile
+            
+            # Create temp file with same extension
+            file_ext = os.path.splitext(file_path)[1]
+            temp_fd, temp_file_path = tempfile.mkstemp(suffix=file_ext)
+            os.close(temp_fd)  # Close the file descriptor
+            
+            # Copy original file to temp location
+            shutil.copy2(file_path, temp_file_path)
+            working_file_path = temp_file_path
+            print(f"   📋 Using temporary file for processing")
+            
+        except Exception as e:
+            print(f"   ⚠️  Could not create temp file: {e}, using original")
+            working_file_path = file_path
         
         # --- STRATEGI BACA FILE ---
         # Karena file Anda sebenarnya adalah CSV (meski ekstensi .xls), 
         # kita prioritaskan pembacaan teks/csv.
         
         separators = [',', '\t', ';', '|']
-        file_read_success = False
 
         # Coba baca sebagai CSV (Prioritas Utama untuk format Grid++Report)
-        for sep in separators:
+        print("🔍 Trying CSV reading strategies...")
+        for i, sep in enumerate(separators):
             try:
+                print(f"   Trying separator {i+1}/{len(separators)}: '{sep}'")
                 # Header=None penting agar baris pertama tidak dianggap judul kolom
-                df_csv = pd.read_csv(file_path, header=None, sep=sep, encoding='latin1', engine='python', on_bad_lines='skip')
+                df_csv = pd.read_csv(working_file_path, header=None, sep=sep, encoding='latin1', engine='python', on_bad_lines='skip')
                 
                 # Cek sekilas apakah dataframe masuk akal (punya cukup kolom/baris)
                 if not df_csv.empty and len(df_csv) > 1:
+                    print(f"   📊 DataFrame shape: {df_csv.shape}")
                     res = ExcelProcessor._extract_from_dataframe(df_csv)
                     if res:
+                        print(f"   ✅ Found {len(res)} records with separator '{sep}'")
                         final_results.extend(res)
                         file_read_success = True
-                        break 
-            except Exception:
-                pass
+                        break
+                    else:
+                        print(f"   ⚠️  DataFrame loaded but no data extracted")
+                else:
+                    print(f"   ❌ DataFrame empty or too small")
+            except Exception as e:
+                print(f"   ❌ CSV reading failed: {type(e).__name__}")
+                continue
 
         # Jika gagal baca sebagai CSV, coba baca sebagai Excel biasa (Fallback)
         if not file_read_success and not final_results:
-            try:
-                with suppress_output():
-                    all_sheets = pd.read_excel(file_path, header=None, sheet_name=None)
-                    for _, df in all_sheets.items():
-                        final_results.extend(ExcelProcessor._extract_from_dataframe(df))
-            except Exception:
-                pass
+            print("🔍 Trying Excel reading strategy...")
+            
+            # Try multiple Excel engines with proper file handle management
+            excel_engines = ['openpyxl', 'xlrd', None]  # None = auto-detect
+            
+            for engine in excel_engines:
+                try:
+                    print(f"   🔧 Trying engine: {engine if engine else 'auto'}")
+                    
+                    with suppress_output():
+                        # Use context manager or explicit close for better file handle management
+                        if engine:
+                            all_sheets = pd.read_excel(working_file_path, header=None, sheet_name=None, engine=engine)
+                        else:
+                            all_sheets = pd.read_excel(working_file_path, header=None, sheet_name=None)
+                        
+                        print(f"   📊 Found {len(all_sheets)} sheets")
+                        
+                        for sheet_name, df in all_sheets.items():
+                            print(f"   📄 Processing sheet: {sheet_name}, shape: {df.shape}")
+                            sheet_results = ExcelProcessor._extract_from_dataframe(df)
+                            if sheet_results:
+                                print(f"   ✅ Found {len(sheet_results)} records in sheet '{sheet_name}'")
+                                final_results.extend(sheet_results)
+                                file_read_success = True
+                            else:
+                                print(f"   ⚠️  No data extracted from sheet '{sheet_name}'")
+                        
+                        # Explicitly clear the sheets data to free file handles
+                        del all_sheets
+                        
+                        # If we got results, break out of engine loop
+                        if file_read_success:
+                            print(f"   ✅ Success with engine: {engine if engine else 'auto'}")
+                            break
+                            
+                except Exception as e:
+                    print(f"   ❌ Engine {engine if engine else 'auto'} failed: {type(e).__name__}: {str(e)}")
+                    continue
 
+        # Final cleanup - comprehensive cleanup to prevent file handle issues
+        try:
+            import gc
+            
+            # Force close any remaining file handles
+            try:
+                # Clear pandas internal caches
+                if hasattr(pd, '_cache'):
+                    pd._cache.clear()
+                
+                # Clear pandas parsers cache
+                if hasattr(pd.io, 'parsers'):
+                    if hasattr(pd.io.parsers, '_parser_defaults'):
+                        pd.io.parsers._parser_defaults.clear()
+                
+                # Clear any Excel file handles in pandas
+                if hasattr(pd.io, 'excel'):
+                    if hasattr(pd.io.excel, '_writers'):
+                        pd.io.excel._writers.clear()
+                        
+            except Exception as cleanup_e:
+                print(f"   ⚠️  Advanced cleanup warning: {cleanup_e}")
+            
+            # Force garbage collection multiple times to ensure cleanup
+            for _ in range(3):
+                gc.collect()
+                
+        except Exception as e:
+            print(f"   ⚠️  Final cleanup warning: {e}")
+            pass
+        
+        # Cleanup temporary file
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.unlink(temp_file_path)
+                print(f"   🗑️  Temporary file cleaned up")
+            except Exception as e:
+                print(f"   ⚠️  Could not cleanup temp file: {e}")
+        
+        print(f"📋 Final result: {len(final_results)} records processed")
         return final_results
 
 # --- Bagian Eksekusi ---
