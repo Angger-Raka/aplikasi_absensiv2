@@ -116,7 +116,7 @@ class ExcelProcessor:
                         
                     if len(jam_list) > 3:
                         entry["Jam Keluar Lembur"] = jam_list[3]
-                        
+                            
                     # Jika ada lebih dari 4 kali scan, sisanya masuk anomali
                     if len(jam_list) > 4:
                         entry["Jam Anomali"] = jam_list[4:]
@@ -300,7 +300,7 @@ if __name__ == "__main__":
     try:
         processor = ExcelProcessor()
         data_json = processor.process_excel_log(file_name)
-        
+
         if not data_json:
             print("\n[INFO] Tidak ditemukan data yang cocok.")
             print("Pastikan file memiliki header 'Name' atau 'Nama' dan format jam di baris bawahnya.")

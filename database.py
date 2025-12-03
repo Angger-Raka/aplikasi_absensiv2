@@ -74,7 +74,7 @@ class DatabaseManager:
             except sqlite3.OperationalError:
                 # Kolom sudah ada
                 pass
-            
+        
             # Tambah kolom keterangan jika belum ada (untuk database existing)
             try:
                 cursor.execute('ALTER TABLE attendance ADD COLUMN keterangan TEXT')
@@ -121,6 +121,18 @@ class DatabaseManager:
                 description TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (attendance_id) REFERENCES attendance (id)
+            )
+        ''')
+        
+            # Tabel izin/cuti
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS leaves (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                employee_id INTEGER,
+                date DATE NOT NULL,
+                description TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (employee_id) REFERENCES employees (id)
             )
         ''')
         
@@ -339,7 +351,7 @@ class DatabaseManager:
             cursor.execute('''
                 SELECT a.id, e.name, a.jam_masuk, a.jam_keluar, 
                        a.jam_masuk_lembur, a.jam_keluar_lembur, a.jam_anomali,
-                       a.shift_id, s.name as shift_name, a.keterangan
+                       a.shift_id, s.name as shift_name, a.keterangan, a.employee_id
                 FROM attendance a
                 JOIN employees e ON a.employee_id = e.id
                 LEFT JOIN shifts s ON a.shift_id = s.id
@@ -362,7 +374,8 @@ class DatabaseManager:
                     'Jam Anomali': jam_anomali,
                     'shift_id': row[7],
                     'shift_name': row[8] or 'Default Shift',
-                    'keterangan': row[9] or ''
+                    'keterangan': row[9] or '',
+                    'employee_id': row[10]
                 })
             
             return attendance_data
@@ -469,6 +482,130 @@ class DatabaseManager:
             cursor = conn.cursor()
             
             cursor.execute('DELETE FROM violations WHERE id = ?', (violation_id,))
+            conn.commit()
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            raise e
+        finally:
+            if conn:
+                conn.close()
+    
+    # ==================== LEAVES MANAGEMENT ====================
+    
+    def add_leave(self, employee_id, date, description):
+        """Tambah izin baru"""
+        conn = None
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                INSERT INTO leaves (employee_id, date, description)
+                VALUES (?, ?, ?)
+            ''', (employee_id, date, description))
+            
+            conn.commit()
+            return cursor.lastrowid
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            raise e
+        finally:
+            if conn:
+                conn.close()
+    
+    def get_leaves_by_employee_date(self, employee_id, date):
+        """Mengambil izin berdasarkan employee_id dan tanggal. Jika date None, ambil semua izin karyawan"""
+        conn = None
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            if date is None:
+                # Get all leaves for this employee
+                cursor.execute('''
+                    SELECT id, date, description, created_at
+                    FROM leaves
+                    WHERE employee_id = ?
+                    ORDER BY date DESC, created_at DESC
+                ''', (employee_id,))
+                
+                results = cursor.fetchall()
+                return [{'id': row[0], 'date': row[1], 'description': row[2], 'created_at': row[3]} for row in results]
+            else:
+                # Get leaves for specific date
+                cursor.execute('''
+                    SELECT id, description, created_at
+                    FROM leaves
+                    WHERE employee_id = ? AND date = ?
+                    ORDER BY created_at
+                ''', (employee_id, date))
+                
+                results = cursor.fetchall()
+                return [{'id': row[0], 'description': row[1], 'created_at': row[2]} for row in results]
+        except Exception as e:
+            raise e
+        finally:
+            if conn:
+                conn.close()
+    
+    def get_leaves_by_date_range(self, start_date, end_date):
+        """Mengambil semua izin dalam range tanggal"""
+        conn = None
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT l.id, l.employee_id, l.date, l.description, l.created_at, e.name
+                FROM leaves l
+                JOIN employees e ON l.employee_id = e.id
+                WHERE l.date BETWEEN ? AND ?
+                ORDER BY l.date, e.name
+            ''', (start_date, end_date))
+            
+            results = cursor.fetchall()
+            
+            return [{'id': row[0], 'employee_id': row[1], 'date': row[2], 
+                    'description': row[3], 'created_at': row[4], 'employee_name': row[5]} for row in results]
+        except Exception as e:
+            raise e
+        finally:
+            if conn:
+                conn.close()
+    
+    def update_leave(self, leave_id, employee_id, date, description):
+        """Update izin berdasarkan ID"""
+        conn = None
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                UPDATE leaves 
+                SET employee_id = ?, date = ?, description = ?
+                WHERE id = ?
+            ''', (employee_id, date, description, leave_id))
+            
+            conn.commit()
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            raise e
+        finally:
+            if conn:
+                conn.close()
+    
+    def delete_leave(self, leave_id):
+        """Hapus izin berdasarkan ID"""
+        conn = None
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('DELETE FROM leaves WHERE id = ?', (leave_id,))
+            
             conn.commit()
         except Exception as e:
             if conn:
