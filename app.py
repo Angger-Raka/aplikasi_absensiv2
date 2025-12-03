@@ -1838,19 +1838,19 @@ SHIFT YANG DIGUNAKAN DALAM PERIODE INI:"""
                 shift_info += f"""
 
 🔸 SHIFT: {shift_settings['name']} (ID: {shift_id})
-   SENIN - JUMAT:
-   • Jam Kerja: {shift_settings['weekday_work_start']} - {shift_settings['weekday_work_end']}
-   • Jam Lembur: {shift_settings['weekday_overtime_start']} - {shift_settings['weekday_overtime_end']}
-   • Batas Overtime: {shift_settings['weekday_overtime_limit']}
-   
-   SABTU:
-   • Jam Kerja: {shift_settings['saturday_work_start']} - {shift_settings['saturday_work_end']}
-   • Jam Lembur: {shift_settings['saturday_overtime_start']} - {shift_settings['saturday_overtime_end']}
-   • Batas Overtime: {shift_settings['saturday_overtime_limit']}
-   
-   PENGATURAN:
-   • Toleransi Terlambat: {shift_settings['late_tolerance']} menit
-   • Mode Overtime: {shift_settings['overtime_mode'].replace('_', ' ').title()}"""
+SENIN - JUMAT:
+• Jam Kerja: {shift_settings['weekday_work_start']} - {shift_settings['weekday_work_end']}
+• Jam Lembur: {shift_settings['weekday_overtime_start']} - {shift_settings['weekday_overtime_end']}
+• Batas Overtime: {shift_settings['weekday_overtime_limit']}
+
+SABTU:
+• Jam Kerja: {shift_settings['saturday_work_start']} - {shift_settings['saturday_work_end']}
+• Jam Lembur: {shift_settings['saturday_overtime_start']} - {shift_settings['saturday_overtime_end']}
+• Batas Overtime: {shift_settings['saturday_overtime_limit']}
+
+PENGATURAN:
+• Toleransi Terlambat: {shift_settings['late_tolerance']} menit
+• Mode Overtime: {shift_settings['overtime_mode'].replace('_', ' ').title()}"""
             
             shift_info += f"""
 
@@ -2384,14 +2384,14 @@ SHIFT YANG DIGUNAKAN DALAM PERIODE INI:"""
             )
             
             # Add title
-            ws.merge_cells("A1:N1")  # Tambahkan kolom N untuk shift
+            ws.merge_cells("A1:M1")  # 13 kolom (tanpa pelanggaran)
             title_cell = ws["A1"]
             title_cell.value = f"LAPORAN ABSENSI - {employee_name.upper()}"
             title_cell.font = Font(bold=True, size=14)
             title_cell.alignment = Alignment(horizontal="center")
             
             # Add period info
-            ws.merge_cells("A2:N2")  # Tambahkan kolom N untuk shift
+            ws.merge_cells("A2:M2")  # 13 kolom (tanpa pelanggaran)
             period_cell = ws["A2"]
             period_cell.value = f"Periode: {start_date} s/d {end_date} (Termasuk hari kosong)"
             period_cell.font = Font(bold=True)
@@ -2400,7 +2400,7 @@ SHIFT YANG DIGUNAKAN DALAM PERIODE INI:"""
             # Add headers (tambah kolom Shift)
             headers = [
                 "Tanggal", "Shift", "Jam Masuk", "Jam Keluar", "Jam Masuk Lembur", "Jam Keluar Lembur",
-                "Jam Kerja", "Jam Lembur", "Loyalitas", "Overtime", "Keterlambatan", "Status", "Keterangan", "Pelanggaran"
+                "Jam Kerja", "Jam Lembur", "Loyalitas", "Overtime", "Keterlambatan", "Status", "Keterangan"
             ]
             
             for col, header in enumerate(headers, 1):
@@ -2472,64 +2472,41 @@ SHIFT YANG DIGUNAKAN DALAM PERIODE INI:"""
                         ws.cell(row=excel_row, column=12).value = "Minggu"
                         # Highlight Sunday rows with red color
                         red_fill = PatternFill(start_color="FFE6E6", end_color="FFE6E6", fill_type="solid")
-                        for col in range(1, 15):  # Tambah 1 kolom untuk shift
+                        for col in range(1, 14):  # 13 kolom (tanpa pelanggaran)
                             ws.cell(row=excel_row, column=col).fill = red_fill
                     else:
                         ws.cell(row=excel_row, column=12).value = "Tidak Hadir"
                 
-                # Keterangan and Pelanggaran
+                # Keterangan
                 keterangan_value = data.get('keterangan', '') or "-"
                 ws.cell(row=excel_row, column=13).value = keterangan_value
                 
-                # Get violations if data exists
-                pelanggaran = "-"
-                if data.get('id'):
-                    violations = self.db_manager.get_violations_by_attendance(data['id'])
-                    if violations:
-                        violation_details = []
-                        for violation in violations:
-                            violation_details.append(f"{violation['start_time']}-{violation['end_time']} {violation['description']}")
-                        pelanggaran = "\n".join(violation_details)
-                
-                pelanggaran_cell = ws.cell(row=excel_row, column=14)
-                pelanggaran_cell.value = pelanggaran
-                if pelanggaran != "-":
-                    pelanggaran_cell.font = Font(color="FF0000")  # Red color for violations
-                
                 # Apply borders to all cells
-                for col in range(1, 15):  # Tambah 1 kolom untuk shift
+                for col in range(1, 14):  # 13 kolom (tanpa pelanggaran)
                     ws.cell(row=excel_row, column=col).border = border
                     
                     # Center align for certain columns
-                    if col in [1, 2, 3, 4, 5, 11]:  # Date, time columns, status
+                    if col in [1, 2, 3, 4, 5, 6, 12]:  # Date, time columns, status
                         ws.cell(row=excel_row, column=col).alignment = Alignment(horizontal="center")
-                    elif col == 13:  # Pelanggaran column
-                        ws.cell(row=excel_row, column=col).alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-                        if '\n' in pelanggaran:
-                            line_count = pelanggaran.count('\n') + 1
-                            ws.row_dimensions[excel_row].height = max(15 * line_count, 30)
                     else:
                         ws.cell(row=excel_row, column=col).alignment = Alignment(horizontal="left", vertical="center")
             
             # Add summary
             summary_row = len(complete_data) + 6
-            ws.merge_cells(f"A{summary_row}:N{summary_row}")  # Tambahkan kolom N untuk shift
+            ws.merge_cells(f"A{summary_row}:M{summary_row}")  # 13 kolom (tanpa pelanggaran)
             summary_cell = ws[f"A{summary_row}"]
             summary_cell.value = f"Laporan lengkap periode {start_date} s/d {end_date} - Total {len(complete_data)} hari (termasuk hari kosong)"
             summary_cell.font = Font(bold=True)
             summary_cell.alignment = Alignment(horizontal="center")
             
-            # Add shift rules section
-            self.add_shift_rules_to_excel(ws, summary_row + 2)
-            
-            # Auto-adjust column widths
+            # Auto-adjust column widths for attendance table (only up to summary_row)
             from openpyxl.utils import get_column_letter
-            for col_num in range(1, 15):  # Columns A to N (1 to 14)
+            for col_num in range(1, 14):  # Columns A to M (1 to 13)
                 column_letter = get_column_letter(col_num)
                 max_length = 0
                 
-                # Check all cells in this column
-                for row_num in range(1, ws.max_row + 1):
+                # Check all cells in this column up to summary_row
+                for row_num in range(1, summary_row + 1):
                     cell = ws.cell(row=row_num, column=col_num)
                     # Skip merged cells
                     if hasattr(cell, 'coordinate') and cell.coordinate in ws.merged_cells:
@@ -2540,14 +2517,16 @@ SHIFT YANG DIGUNAKAN DALAM PERIODE INI:"""
                     except:
                         pass
                 
-                # Set column width (minimum 10, maximum 25, except for Pelanggaran column)
-                if col_num == 13:  # Kolom Pelanggaran (index 13 dalam Excel)
-                    # Kolom pelanggaran dibuat lebih lebar untuk menampung detail pelanggaran
-                    adjusted_width = min(max(max_length + 2, 40), 60)
-                else:
-                    adjusted_width = min(max(max_length + 2, 10), 25)
+                # Set column width (minimum 10, maximum 25)
+                adjusted_width = min(max(max_length + 2, 10), 25)
                 
                 ws.column_dimensions[column_letter].width = adjusted_width
+            
+            # Add violations table
+            violations_start_row = self.add_violations_table_to_excel(ws, summary_row + 3, employee_id, start_date, end_date)
+            
+            # Add shift rules section
+            self.add_shift_rules_to_excel(ws, violations_start_row + 2)
             
             # Save workbook
             wb.save(file_path)
@@ -2580,7 +2559,7 @@ SHIFT YANG DIGUNAKAN DALAM PERIODE INI:"""
                 return
             
             # Title
-            ws.merge_cells(f"A{start_row}:N{start_row}")  # Tambahkan kolom N untuk shift
+            ws.merge_cells(f"A{start_row}:M{start_row}")  # 13 kolom (tanpa pelanggaran)
             title_cell = ws[f"A{start_row}"]
             title_cell.value = "PERATURAN SHIFT"
             title_cell.font = Font(bold=True, size=12)
@@ -2589,7 +2568,7 @@ SHIFT YANG DIGUNAKAN DALAM PERIODE INI:"""
             current_row = start_row + 2
             
             # Shift name
-            ws.merge_cells(f"A{current_row}:N{current_row}")  # Tambahkan kolom N untuk shift
+            ws.merge_cells(f"A{current_row}:M{current_row}")  # 13 kolom (tanpa pelanggaran)
             shift_name_cell = ws[f"A{current_row}"]
             shift_name_cell.value = f"SHIFT: {shift_settings['name']}"
             shift_name_cell.font = Font(bold=True)
@@ -2598,7 +2577,7 @@ SHIFT YANG DIGUNAKAN DALAM PERIODE INI:"""
             current_row += 2
             
             # Weekday rules
-            ws.merge_cells(f"A{current_row}:N{current_row}")  # Tambahkan kolom N untuk shift
+            ws.merge_cells(f"A{current_row}:M{current_row}")  # 13 kolom (tanpa pelanggaran)
             weekday_title = ws[f"A{current_row}"]
             weekday_title.value = "SENIN - JUMAT:"
             weekday_title.font = Font(bold=True)
@@ -2614,7 +2593,7 @@ SHIFT YANG DIGUNAKAN DALAM PERIODE INI:"""
             ]
             
             for rule in weekday_rules:
-                ws.merge_cells(f"A{current_row}:N{current_row}")  # Tambahkan kolom N untuk shift
+                ws.merge_cells(f"A{current_row}:M{current_row}")  # 13 kolom (tanpa pelanggaran)
                 rule_cell = ws[f"A{current_row}"]
                 rule_cell.value = rule
                 current_row += 1
@@ -2622,7 +2601,7 @@ SHIFT YANG DIGUNAKAN DALAM PERIODE INI:"""
             current_row += 1
             
             # Saturday rules
-            ws.merge_cells(f"A{current_row}:N{current_row}")  # Tambahkan kolom N untuk shift
+            ws.merge_cells(f"A{current_row}:M{current_row}")  # 13 kolom (tanpa pelanggaran)
             saturday_title = ws[f"A{current_row}"]
             saturday_title.value = "SABTU:"
             saturday_title.font = Font(bold=True)
@@ -2638,7 +2617,7 @@ SHIFT YANG DIGUNAKAN DALAM PERIODE INI:"""
             ]
             
             for rule in saturday_rules:
-                ws.merge_cells(f"A{current_row}:N{current_row}")  # Tambahkan kolom N untuk shift
+                ws.merge_cells(f"A{current_row}:M{current_row}")  # 13 kolom (tanpa pelanggaran)
                 rule_cell = ws[f"A{current_row}"]
                 rule_cell.value = rule
                 current_row += 1
@@ -2646,21 +2625,21 @@ SHIFT YANG DIGUNAKAN DALAM PERIODE INI:"""
             current_row += 1
             
             # Sunday and general rules
-            ws.merge_cells(f"A{current_row}:N{current_row}")  # Tambahkan kolom N untuk shift
+            ws.merge_cells(f"A{current_row}:M{current_row}")  # 13 kolom (tanpa pelanggaran)
             sunday_title = ws[f"A{current_row}"]
             sunday_title.value = "MINGGU:"
             sunday_title.font = Font(bold=True)
             
             current_row += 1
             
-            ws.merge_cells(f"A{current_row}:N{current_row}")  # Tambahkan kolom N untuk shift
+            ws.merge_cells(f"A{current_row}:M{current_row}")  # 13 kolom (tanpa pelanggaran)
             sunday_rule = ws[f"A{current_row}"]
             sunday_rule.value = "• Hitung durasi kerja saja (tidak ada lembur/overtime)"
             
             current_row += 2
             
             # General settings
-            ws.merge_cells(f"A{current_row}:N{current_row}")  # Tambahkan kolom N untuk shift
+            ws.merge_cells(f"A{current_row}:M{current_row}")  # 13 kolom (tanpa pelanggaran)
             general_title = ws[f"A{current_row}"]
             general_title.value = "PENGATURAN UMUM:"
             general_title.font = Font(bold=True)
@@ -2673,13 +2652,179 @@ SHIFT YANG DIGUNAKAN DALAM PERIODE INI:"""
             ]
             
             for rule in general_rules:
-                ws.merge_cells(f"A{current_row}:N{current_row}")  # Tambahkan kolom N untuk shift
+                ws.merge_cells(f"A{current_row}:M{current_row}")  # 13 kolom (tanpa pelanggaran)
                 rule_cell = ws[f"A{current_row}"]
                 rule_cell.value = rule
                 current_row += 1
                 
         except Exception as e:
             print(f"Error adding shift rules: {e}")
+    
+    def calculate_violation_duration(self, start_time, end_time):
+        """Calculate duration in minutes between start_time and end_time"""
+        try:
+            from datetime import datetime
+            
+            # Parse times (format: HH:MM:SS)
+            start = datetime.strptime(start_time, "%H:%M:%S")
+            end = datetime.strptime(end_time, "%H:%M:%S")
+            
+            # Handle case where end time is next day (rare but possible)
+            if end < start:
+                end = end.replace(day=start.day + 1)
+            
+            # Calculate difference in minutes
+            diff = end - start
+            return int(diff.total_seconds() / 60)
+        
+        except Exception as e:
+            print(f"Error calculating duration: {e}")
+            return 0
+    
+    def format_violation_duration(self, minutes):
+        """Format duration in minutes to readable text"""
+        if minutes == 0:
+            return "0 menit"
+        
+        hours = minutes // 60
+        mins = minutes % 60
+        
+        if hours > 0 and mins > 0:
+            return f"{hours} jam {mins} menit"
+        elif hours > 0:
+            return f"{hours} jam"
+        else:
+            return f"{mins} menit"
+    
+    def add_violations_table_to_excel(self, ws, start_row, employee_id, start_date, end_date):
+        """Add violations table to Excel below attendance report"""
+        try:
+            from openpyxl.utils import get_column_letter
+            from datetime import datetime
+            
+            # Define styles
+            header_font = Font(bold=True, color="FFFFFF")
+            header_fill = PatternFill(start_color="DC3545", end_color="DC3545", fill_type="solid")  # Red for violations
+            header_alignment = Alignment(horizontal="center", vertical="center")
+            border = Border(
+                left=Side(style="thin"),
+                right=Side(style="thin"), 
+                top=Side(style="thin"),
+                bottom=Side(style="thin")
+            )
+            
+            # Get all violations for this employee in the date range
+            attendance_records = self.db_manager.get_attendance_by_employee_period(
+                employee_id, start_date, end_date
+            )
+            
+            violations = []
+            for record in attendance_records:
+                if record.get('id'):
+                    violation_list = self.db_manager.get_violations_by_attendance(record['id'])
+                    for violation in violation_list:
+                        # Calculate duration
+                        duration_minutes = self.calculate_violation_duration(
+                            violation['start_time'], violation['end_time']
+                        )
+                        
+                        violations.append({
+                            'date': record['date'],
+                            'start_time': violation['start_time'],
+                            'end_time': violation['end_time'],
+                            'description': violation['description'],
+                            'duration_minutes': duration_minutes
+                        })
+            
+            # Add spacing
+            current_row = start_row + 2
+            
+            # Title
+            ws.merge_cells(f"A{current_row}:E{current_row}")
+            title_cell = ws[f"A{current_row}"]
+            title_cell.value = "LAPORAN PELANGGARAN"
+            title_cell.font = Font(bold=True, size=14)
+            title_cell.alignment = Alignment(horizontal="center")
+            title_cell.fill = PatternFill(start_color="DC3545", end_color="DC3545", fill_type="solid")
+            title_cell.font = Font(bold=True, size=14, color="FFFFFF")
+            
+            current_row += 2
+            
+            # Headers
+            headers = ["Tanggal", "Hari", "Rentang Waktu", "Durasi", "Keterangan"]
+            for col, header in enumerate(headers, 1):
+                cell = ws.cell(row=current_row, column=col)
+                cell.value = header
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = header_alignment
+                cell.border = border
+            
+            current_row += 1
+            
+            # Data rows
+            if violations:
+                day_names = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
+                
+                for violation in violations:
+                    # Tanggal
+                    date_obj = datetime.strptime(violation['date'], '%Y-%m-%d')
+                    day_name = day_names[date_obj.weekday()]
+                    
+                    ws.cell(row=current_row, column=1).value = violation['date']
+                    ws.cell(row=current_row, column=1).alignment = Alignment(horizontal="center")
+                    ws.cell(row=current_row, column=1).border = border
+                    
+                    # Hari
+                    ws.cell(row=current_row, column=2).value = day_name
+                    ws.cell(row=current_row, column=2).alignment = Alignment(horizontal="center")
+                    ws.cell(row=current_row, column=2).border = border
+                    
+                    # Rentang Waktu
+                    rentang_waktu = f"{violation['start_time']} - {violation['end_time']}"
+                    ws.cell(row=current_row, column=3).value = rentang_waktu
+                    ws.cell(row=current_row, column=3).alignment = Alignment(horizontal="center")
+                    ws.cell(row=current_row, column=3).border = border
+                    
+                    # Durasi
+                    duration_text = self.format_violation_duration(violation['duration_minutes'])
+                    ws.cell(row=current_row, column=4).value = duration_text
+                    ws.cell(row=current_row, column=4).alignment = Alignment(horizontal="center")
+                    ws.cell(row=current_row, column=4).border = border
+                    
+                    # Keterangan
+                    ws.cell(row=current_row, column=5).value = violation['description'] or "-"
+                    ws.cell(row=current_row, column=5).alignment = Alignment(horizontal="left")
+                    ws.cell(row=current_row, column=5).border = border
+                    
+                    current_row += 1
+            else:
+                # No violations
+                ws.merge_cells(f"A{current_row}:E{current_row}")
+                no_data_cell = ws[f"A{current_row}"]
+                no_data_cell.value = "Tidak ada pelanggaran dalam periode ini"
+                no_data_cell.alignment = Alignment(horizontal="center")
+                no_data_cell.font = Font(italic=True)
+                current_row += 1
+            
+            # Auto-adjust column widths for violations table
+            col_widths = {
+                1: 15,  # Tanggal
+                2: 12,  # Hari
+                3: 25,  # Rentang Waktu
+                4: 15,  # Durasi
+                5: 40   # Keterangan
+            }
+            
+            for col_num, width in col_widths.items():
+                column_letter = get_column_letter(col_num)
+                ws.column_dimensions[column_letter].width = width
+            
+            return current_row
+            
+        except Exception as e:
+            print(f"Error adding violations table: {e}")
+            return start_row + 10  # Fallback row
 
 class ShiftManagementTab(QWidget):
     def __init__(self, db_manager):
