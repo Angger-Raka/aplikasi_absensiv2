@@ -1981,7 +1981,7 @@ PENGATURAN:
                 jam_kerja_total_text = self.format_time_duration(jam_kerja_total)
                 jam_lembur_text = self.format_time_duration(jam_lembur)
                 loyalitas_text = self.format_time_duration(loyalitas / 60, "menit_only") if loyalitas > 0 else "-"  # loyalitas is in minutes
-                overtime_text = self.format_time_duration(overtime, "menit_only")
+                overtime_text = self.format_time_duration(overtime) if overtime > 0 else "-"  # overtime in hours
                 terlambat_text = self.format_time_duration(terlambat / 60, "menit_only")  # terlambat is in minutes
                 
                 self.report_table.setItem(row, 6, QTableWidgetItem(jam_kerja_total_text))  # Total jam kerja
@@ -2065,7 +2065,7 @@ PENGATURAN:
         total_kerja_text = self.format_time_duration(total_jam_kerja)
         total_lembur_text = self.format_time_duration(total_jam_lembur)
         total_loyalitas_text = self.format_time_duration(total_loyalitas / 60, "menit_only") if total_loyalitas > 0 else "0 menit"  # loyalitas is in minutes
-        total_overtime_text = self.format_time_duration(total_overtime, "menit_only")
+        total_overtime_text = self.format_time_duration(total_overtime) if total_overtime > 0 else "0 jam"  # overtime in hours
         total_terlambat_text = self.format_time_duration(total_terlambat / 60, "menit_only")  # terlambat is in minutes
         
         summary_text = (f"Laporan: {employee_name} | "
@@ -2166,7 +2166,7 @@ PENGATURAN:
         return 0.0
     
     def calculate_overtime(self, data, shift_settings, day_of_week):
-        """Calculate overtime: jika >1 jam setelah jam kerja maka overtime = 1 jam"""
+        """Calculate overtime: dari jam kerja normal pulang hingga batas overtime, dibulatkan ke bawah per jam"""
         # Sunday has no overtime
         if day_of_week == 6:
             return 0.0
@@ -2177,22 +2177,29 @@ PENGATURAN:
         try:
             keluar = datetime.strptime(data['jam_keluar'], "%H:%M")
             
-            # Get scheduled work end time based on day
+            # Get scheduled work end time and overtime limit based on day
             if day_of_week == 5:  # Saturday
                 jadwal_selesai = datetime.strptime(shift_settings['saturday_work_end'], "%H:%M")
+                batas_overtime = datetime.strptime(shift_settings['saturday_overtime_limit'], "%H:%M")
             else:  # Monday-Friday
                 jadwal_selesai = datetime.strptime(shift_settings['weekday_work_end'], "%H:%M")
+                batas_overtime = datetime.strptime(shift_settings['weekday_overtime_limit'], "%H:%M")
             
-            # Calculate overtime with new logic
+            # Calculate overtime: dari jam kerja normal pulang sampai min(jam keluar aktual, batas overtime)
             if keluar > jadwal_selesai:
-                overtime_minutes = (keluar - jadwal_selesai).total_seconds() / 60
+                # Gunakan waktu yang lebih kecil antara jam keluar aktual dan batas overtime
+                waktu_akhir_overtime = min(keluar, batas_overtime)
                 
-                # Jika >= 1 jam (60 menit), overtime = 1 jam
-                if overtime_minutes >= 60:
-                    return 1.0  # 1 jam overtime
-                else:
-                    # Jika < 1 jam, tidak ada overtime (masuk loyalitas atau tidak ada)
-                    return 0.0
+                # Hitung selisih dalam jam
+                overtime_hours = (waktu_akhir_overtime - jadwal_selesai).total_seconds() / 3600
+                
+                # Bulatkan ke bawah (floor) per jam
+                overtime_full_hours = int(overtime_hours)
+                
+                return float(overtime_full_hours)
+            else:
+                # Jika jam keluar <= jam kerja normal, tidak ada overtime
+                return 0.0
                         
         except Exception as e:
             print(f"Error calculating overtime: {e}")
@@ -2451,7 +2458,7 @@ PENGATURAN:
                     ws.cell(row=excel_row, column=7).value = self.format_time_duration(jam_kerja)
                     ws.cell(row=excel_row, column=8).value = self.format_time_duration(jam_lembur) if jam_lembur > 0 else "-"
                     ws.cell(row=excel_row, column=9).value = self.format_time_duration(loyalitas / 60, "menit_only") if loyalitas > 0 else "-"
-                    ws.cell(row=excel_row, column=10).value = self.format_time_duration(overtime, "menit_only") if overtime > 0 else "-"
+                    ws.cell(row=excel_row, column=10).value = self.format_time_duration(overtime) if overtime > 0 else "-"  # overtime in hours
                     ws.cell(row=excel_row, column=11).value = self.format_time_duration(terlambat / 60, "menit_only") if terlambat > 0 else "-"
                     ws.cell(row=excel_row, column=12).value = "Hadir"
                     
@@ -2518,7 +2525,7 @@ PENGATURAN:
                         pass
                 
                 # Set column width (minimum 10, maximum 25)
-                adjusted_width = min(max(max_length + 2, 10), 25)
+                    adjusted_width = min(max(max_length + 2, 10), 25)
                 
                 ws.column_dimensions[column_letter].width = adjusted_width
             
